@@ -1,0 +1,17 @@
+[Unit]
+Description=NurseLink Laravel scheduler tick
+After=network.target mysql.service
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/nurselink-api
+ExecStart=/usr/bin/php artisan schedule:run --no-interaction
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/var/www/nurselink-api/storage /var/www/nurselink-api/bootstrap/cache
+

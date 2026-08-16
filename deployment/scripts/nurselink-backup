@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+umask 077
+
+readonly APP_ROOT="/var/www/nurselink-api"
+readonly WEB_ROOT="/var/www/nurselink-web"
+readonly BACKUP_ROOT="/root/nurselink-automated-backups"
+readonly RUNTIME_ROOT="/run/nurselink-backup"
+readonly RETENTION_DAYS="14"
+readonly STAMP="$(date -u +%Y-%m-%d_%H%M%SZ)"
+readonly FINAL_DIR="${BACKUP_ROOT}/${STAMP}"
+readonly STAGING_DIR="${BACKUP_ROOT}/.${STAMP}.partial"
+readonly CLIENT_CONFIG="${RUNTIME_ROOT}/mysql-client.cnf"
+
+cleanup() {
+  local exit_code=$?
+  if [[ -f "${CLIENT_CONFIG}" ]]; then
+    shred -u "${CLIENT_CONFIG}" 2>/dev/null || rm -f "${CLIENT_CONFIG}"
+  fi
+  if (( exit_code != 0 )); then
+    rm -rf -- "${STAGING_DIR}"
+  fi
+  exit "${exit_code}"
+}
+trap cleanup EXIT
+
+[[ "${BACKUP_ROOT}" == "/root/nurselink-automated-backups" ]]
+[[ -d "${APP_ROOT}" && -d "${WEB_ROOT}" ]]
+
+install -d -o root -g root -m 0700 "${BACKUP_ROOT}" "${RUNTIME_ROOT}"
+mkdir -m 0700 "${STAGING_DIR}"
+
+database_name="$(/usr/bin/php /usr/local/lib/nurselink/export-database-client-config.php "${CLIENT_CONFIG}")"
+
+/usr/bin/mysqldump \
+  --defaults-extra-file="${CLIENT_CONFIG}" \
+  --single-transaction \
+  --routines \
+  --triggers \
+  --events \
+  "${database_name}" | /usr/bin/gzip -9 > "${STAGING_DIR}/database.sql.gz"
+
+/usr/bin/gzip -t "${STAGING_DIR}/database.sql.gz"
+
+/usr/bin/tar \
+  --exclude='nurselink-api/storage/logs/*' \
+  --exclude='nurselink-api/storage/framework/cache/*' \
+  --exclude='nurselink-api/storage/framework/sessions/*' \
+  --exclude='nurselink-api/storage/framework/views/*' \
+  -C /var/www -czf "${STAGING_DIR}/nurselink-api.tar.gz" nurselink-api
+
+/usr/bin/tar -C /var/www -czf "${STAGING_DIR}/nurselink-web.tar.gz" nurselink-web
+
+api_commit="$(runuser -u deploy -- git -C "${APP_ROOT}" rev-parse HEAD)"
+web_commit="$(runuser -u deploy -- git -C "${WEB_ROOT}" rev-parse HEAD)"
+
+/usr/bin/printf '{\n  "created_at_utc": "%s",\n  "hostname": "%s",\n  "database": "%s",\n  "api_commit": "%s",\n  "web_commit": "%s",\n  "retention_days": %s\n}\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(hostname -f)" "${database_name}" "${api_commit}" "${web_commit}" "${RETENTION_DAYS}" \
+  > "${STAGING_DIR}/manifest.json"
+
+(
+  cd "${STAGING_DIR}"
+  /usr/bin/sha256sum database.sql.gz nurselink-api.tar.gz nurselink-web.tar.gz manifest.json > SHA256SUMS
+  /usr/bin/sha256sum -c SHA256SUMS
+)
+
+mv "${STAGING_DIR}" "${FINAL_DIR}"
+
+while IFS= read -r -d '' expired_dir; do
+  rm -rf -- "${expired_dir}"
+done < <(/usr/bin/find "${BACKUP_ROOT}" -mindepth 1 -maxdepth 1 -type d -mtime "+${RETENTION_DAYS}" -print0)
+
+/usr/bin/printf 'NurseLink backup completed: %s\n' "${FINAL_DIR}"

@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the NurseLink Laravel scheduler every minute
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+AccuracySec=1s
+Persistent=true
+Unit=nurselink-scheduler.service
+
+[Install]
+WantedBy=timers.target
+

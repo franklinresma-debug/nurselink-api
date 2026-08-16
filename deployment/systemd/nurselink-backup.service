@@ -1,0 +1,18 @@
+[Unit]
+Description=NurseLink restricted production backup
+After=network.target mysql.service
+Requires=mysql.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/sbin/nurselink-backup
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=full
+ReadWritePaths=/root/nurselink-automated-backups /run/nurselink-backup
+RuntimeDirectory=nurselink-backup
+RuntimeDirectoryMode=0700
