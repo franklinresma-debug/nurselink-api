@@ -9,3 +9,6 @@
 /storage/logs/*
 /bootstrap/cache/*.php
 !.gitignore
+
+.env.save
+error_log
