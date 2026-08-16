@@ -134,12 +134,22 @@ class OperationsCenterController extends Controller
             ? round(((float)$diskFree / (float)$diskTotal) * 100, 2)
             : null;
 
-        $backupAge = $this->latestBackupAgeHours('/home/frankresma/nurselink-backups');
+        $backupAge = $this->latestBackupAgeHours(
+            (string) config('operations.backup.root', '')
+        );
         $logErrors = $this->recentLogErrorCount();
 
-        $htaccess = '/home/frankresma/app.amsertech.com/.htaccess';
-        $securityOk = is_file($htaccess)
-            && str_contains((string)@file_get_contents($htaccess), 'NURSELINK_SECURITY_HEADERS_V330_START');
+        $securityPolicyPath = (string) config('operations.security_headers_policy_path', '');
+        $securityPolicyMarker = (string) config(
+            'operations.security_headers_policy_marker',
+            'NURSELINK_SECURITY_HEADERS_V330_START'
+        );
+        $securityOk = $securityPolicyPath !== ''
+            && is_file($securityPolicyPath)
+            && str_contains(
+                (string) @file_get_contents($securityPolicyPath),
+                $securityPolicyMarker
+            );
 
         $warnings = [];
         if ($dbMs === null || $dbMs > 500) $warnings[] = 'database_latency';
@@ -229,7 +239,6 @@ class OperationsCenterController extends Controller
         $latest = null;
 
         foreach (glob(rtrim($root, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . '*') ?: [] as $path) {
-            if (!is_dir($path)) continue;
             $mtime = @filemtime($path);
             if ($mtime !== false && ($latest === null || $mtime > $latest)) $latest = $mtime;
         }

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd /home/frankresma/nurselink-api
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+API_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+cd "${API_ROOT}"
 
 if [ ! -f .env ]; then
   echo 'ERROR: .env does not exist. Copy .env.production.example to .env and edit DB_PASSWORD first.'
@@ -44,7 +46,7 @@ NurseLink API installation phase complete.
 Next:
   1. Create the Super Administrator:
      php artisan nurselink:make-super-admin YOUR_EMAIL
-  2. Add the two cron jobs from cron-jobs.txt in cPanel.
+  2. Install the scheduler cron and supervised queue worker from deployment/.
   3. Open https://api.amsertech.com/api/health/live
-  4. Then deploy the NurseLink Next.js frontend.
+  4. Run deployment/scripts/post-deploy-verify.sh.
 TXT

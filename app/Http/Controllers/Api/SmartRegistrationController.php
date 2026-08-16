@@ -3,7 +3,10 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\ProcessSmartRegistrationDocument;
 use App\Services\MembershipLifecycleService;
+use App\Services\SmartRegistration\LocalOcrService;
+use App\Services\SmartRegistration\SmartRegistrationDocumentProcessor;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -15,11 +18,14 @@ use Illuminate\Validation\Rule;
 class SmartRegistrationController extends Controller
 {
     private const PROFILE_TABLE = 'nurselink_smart_registration_profiles';
+
     private const DOCUMENT_TABLE = 'nurselink_smart_registration_documents';
+
     private const MAX_EXTRACTED_TEXT = 120000;
+
     private const LOW_CONFIDENCE_THRESHOLD = 0.75;
 
-    public function show(Request $request): JsonResponse
+    public function show(Request $request, LocalOcrService $ocr): JsonResponse
     {
         $user = $request->user();
         $profile = $this->ensureProfile($user);
@@ -38,12 +44,15 @@ class SmartRegistrationController extends Controller
                 'missing' => $missing,
                 'completion' => $this->completion($missing),
                 'membership' => $this->presentMembership($membership),
-                'extraction_capabilities' => $this->extractionCapabilities(),
+                'extraction_capabilities' => [
+                    ...$ocr->capabilities(),
+                    'note' => 'Automatic extraction assists data entry only. Applicants must review and confirm extracted values; credential verification remains reviewer-controlled.',
+                ],
             ],
         ]);
     }
 
-    public function upload(Request $request): JsonResponse
+    public function upload(Request $request, SmartRegistrationDocumentProcessor $processor): JsonResponse
     {
         $user = $request->user();
         $this->assertEditableMembership($user);
@@ -95,8 +104,8 @@ class SmartRegistrationController extends Controller
         $safeExtension = in_array($extension, ['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'], true)
             ? $extension
             : 'bin';
-        $storedName = Str::uuid()->toString() . '.' . $safeExtension;
-        $directory = 'nurselink-smart-registration/' . preg_replace('/[^A-Za-z0-9._-]/', '_', $userId);
+        $storedName = Str::uuid()->toString().'.'.$safeExtension;
+        $directory = 'nurselink-smart-registration/'.preg_replace('/[^A-Za-z0-9._-]/', '_', $userId);
         $storagePath = $file->storeAs($directory, $storedName, 'local');
 
         if (! $storagePath) {
@@ -111,10 +120,16 @@ class SmartRegistrationController extends Controller
             'file_size' => (int) $file->getSize(),
             'sha256' => $sha,
             'document_type' => 'other',
-            'extraction_status' => 'processing',
+            'extraction_status' => 'queued',
+            'extraction_message' => 'Document queued for automatic extraction.',
             'created_at' => now(),
             'updated_at' => now(),
         ];
+
+        if (Schema::hasColumn(self::DOCUMENT_TABLE, 'security_status')) {
+            $insert['security_status'] = 'pending';
+            $insert['security_message'] = 'Document is waiting for security scanning.';
+        }
 
         if (Schema::hasColumn(self::DOCUMENT_TABLE, 'version')) {
             $insert['version'] = $replacement
@@ -129,20 +144,6 @@ class SmartRegistrationController extends Controller
         }
 
         $id = DB::table(self::DOCUMENT_TABLE)->insertGetId($insert);
-
-        $row = DB::table(self::DOCUMENT_TABLE)->where('id', $id)->first();
-        $result = $this->extractDocument($row);
-
-        DB::table(self::DOCUMENT_TABLE)->where('id', $id)->update([
-            'document_type' => $result['document_type'],
-            'extraction_status' => $result['status'],
-            'extracted_fields' => $result['fields'] !== []
-                ? json_encode($result['fields'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
-                : null,
-            'extraction_message' => $result['message'],
-            'extracted_at' => now(),
-            'updated_at' => now(),
-        ]);
 
         if ($replacement && Schema::hasColumn(self::DOCUMENT_TABLE, 'is_current')) {
             $replacementUpdate = [
@@ -162,19 +163,18 @@ class SmartRegistrationController extends Controller
                 ->update($replacementUpdate);
         }
 
-        DB::table(self::PROFILE_TABLE)
-            ->where('user_id', $user->getKey())
-            ->update([
-                'last_extracted_at' => now(),
-                'updated_at' => now(),
-            ]);
+        if ((bool) config('smart_registration.queue.enabled', true)) {
+            ProcessSmartRegistrationDocument::dispatch($id);
+        } else {
+            $processor->process($id);
+        }
 
         $updated = DB::table(self::DOCUMENT_TABLE)->where('id', $id)->first();
 
         return response()->json([
-            'message' => $result['fields'] !== []
-                ? 'Document uploaded. NurseLink found information for you to review.'
-                : 'Document uploaded. Complete any information NurseLink could not confidently detect.',
+            'message' => in_array($updated->extraction_status, ['queued', 'processing'], true)
+                ? 'Document uploaded and queued for automatic extraction.'
+                : 'Document uploaded. Review the extracted information and complete any missing fields.',
             'data' => $this->presentDocument($updated),
         ], 201);
     }
@@ -208,9 +208,15 @@ class SmartRegistrationController extends Controller
             && ! empty($row->replaces_document_id)
         ) {
             $restore = ['updated_at' => now()];
-            if (Schema::hasColumn(self::DOCUMENT_TABLE, 'is_current')) $restore['is_current'] = true;
-            if (Schema::hasColumn(self::DOCUMENT_TABLE, 'replaced_by_document_id')) $restore['replaced_by_document_id'] = null;
-            if (Schema::hasColumn(self::DOCUMENT_TABLE, 'replaced_at')) $restore['replaced_at'] = null;
+            if (Schema::hasColumn(self::DOCUMENT_TABLE, 'is_current')) {
+                $restore['is_current'] = true;
+            }
+            if (Schema::hasColumn(self::DOCUMENT_TABLE, 'replaced_by_document_id')) {
+                $restore['replaced_by_document_id'] = null;
+            }
+            if (Schema::hasColumn(self::DOCUMENT_TABLE, 'replaced_at')) {
+                $restore['replaced_at'] = null;
+            }
 
             DB::table(self::DOCUMENT_TABLE)
                 ->where('id', $row->replaces_document_id)
@@ -263,7 +269,7 @@ class SmartRegistrationController extends Controller
             'primary_license_country' => ['nullable', 'string', 'max:120'],
             'primary_license_expiry' => ['nullable', 'date'],
             'highest_nursing_education' => ['required', 'string', 'max:190'],
-            'graduation_year' => ['nullable', 'integer', 'min:1940', 'max:' . (now()->year + 1)],
+            'graduation_year' => ['nullable', 'integer', 'min:1940', 'max:'.(now()->year + 1)],
             'sources' => ['nullable', 'array'],
         ]);
 
@@ -396,7 +402,9 @@ class SmartRegistrationController extends Controller
     {
         $membership = $this->ensureDraftMembership($user);
 
-        if (in_array($membership->status, ['draft', 'needs_information'], true)) return;
+        if (in_array($membership->status, ['draft', 'needs_information'], true)) {
+            return;
+        }
 
         $messages = [
             'submitted' => 'Your application has been submitted and is locked while waiting for review.',
@@ -436,7 +444,9 @@ class SmartRegistrationController extends Controller
             ->where('user_id', $user->getKey())
             ->first();
 
-        if ($existing) return $existing;
+        if ($existing) {
+            return $existing;
+        }
 
         $defaults = $this->coreUserDefaults($user);
         $id = DB::table(self::PROFILE_TABLE)->insertGetId([
@@ -455,7 +465,9 @@ class SmartRegistrationController extends Controller
             ->where('user_id', $user->getKey())
             ->first();
 
-        if ($existing) return $existing;
+        if ($existing) {
+            return $existing;
+        }
 
         $coreMemberNumber = Schema::hasColumn('users', 'member_number')
             ? trim((string) ($user->member_number ?? ''))
@@ -474,8 +486,12 @@ class SmartRegistrationController extends Controller
             'created_at' => now(),
             'updated_at' => now(),
         ];
-        if (Schema::hasColumn('nurselink_memberships', 'last_status_changed_at')) $insert['last_status_changed_at'] = now();
-        if (Schema::hasColumn('nurselink_memberships', 'last_status_changed_by')) $insert['last_status_changed_by'] = (string) $user->getKey();
+        if (Schema::hasColumn('nurselink_memberships', 'last_status_changed_at')) {
+            $insert['last_status_changed_at'] = now();
+        }
+        if (Schema::hasColumn('nurselink_memberships', 'last_status_changed_by')) {
+            $insert['last_status_changed_by'] = (string) $user->getKey();
+        }
 
         $id = DB::table('nurselink_memberships')->insertGetId($insert);
 
@@ -503,8 +519,12 @@ class SmartRegistrationController extends Controller
 
         if (($first === '' || $last === '') && $name !== '') {
             $parts = preg_split('/\s+/', $name) ?: [];
-            if ($first === '' && $parts !== []) $first = (string) array_shift($parts);
-            if ($last === '' && $parts !== []) $last = (string) array_pop($parts);
+            if ($first === '' && $parts !== []) {
+                $first = (string) array_shift($parts);
+            }
+            if ($last === '' && $parts !== []) {
+                $last = (string) array_pop($parts);
+            }
         }
 
         return [
@@ -525,9 +545,12 @@ class SmartRegistrationController extends Controller
         foreach ($columns as $column) {
             if (Schema::hasColumn('users', $column)) {
                 $value = trim((string) ($user->{$column} ?? ''));
-                if ($value !== '') return $value;
+                if ($value !== '') {
+                    return $value;
+                }
             }
         }
+
         return null;
     }
 
@@ -554,7 +577,7 @@ class SmartRegistrationController extends Controller
         }
 
         if (Schema::hasColumn('users', 'name')) {
-            $updates['name'] = trim(($data['first_name'] ?? '') . ' ' . ($data['last_name'] ?? ''));
+            $updates['name'] = trim(($data['first_name'] ?? '').' '.($data['last_name'] ?? ''));
         }
 
         if ($updates !== []) {
@@ -567,7 +590,9 @@ class SmartRegistrationController extends Controller
 
     private function syncStructuredCredential(object $user, array $data): void
     {
-        if (! Schema::hasTable('nurselink_credentials_registry')) return;
+        if (! Schema::hasTable('nurselink_credentials_registry')) {
+            return;
+        }
 
         $license = trim((string) ($data['primary_license_number'] ?? ''));
         $education = trim((string) ($data['highest_nursing_education'] ?? ''));
@@ -618,7 +643,7 @@ class SmartRegistrationController extends Controller
                     'issuing_body' => null,
                     'credential_number' => null,
                     'country' => null,
-                    'issue_date' => ! empty($data['graduation_year']) ? $data['graduation_year'] . '-01-01' : null,
+                    'issue_date' => ! empty($data['graduation_year']) ? $data['graduation_year'].'-01-01' : null,
                     'expiry_date' => null,
                     'verification_status' => 'unverified',
                     'notes' => 'Created from applicant-confirmed Smart Registration information.',
@@ -657,6 +682,9 @@ class SmartRegistrationController extends Controller
             'mime_type' => $row->mime_type,
             'file_size' => (int) $row->file_size,
             'document_type' => $row->document_type,
+            'security_status' => $row->security_status ?? 'unknown',
+            'security_message' => $row->security_message ?? null,
+            'security_scanned_at' => $row->security_scanned_at ?? null,
             'extraction_status' => $row->extraction_status,
             'extracted_fields' => $this->decodeJson($row->extracted_fields ?? null),
             'extraction_message' => $row->extraction_message,
@@ -768,6 +796,7 @@ class SmartRegistrationController extends Controller
     {
         $total = 10;
         $remaining = min($total, count($missing));
+
         return (int) round((($total - $remaining) / $total) * 100);
     }
 
@@ -777,15 +806,21 @@ class SmartRegistrationController extends Controller
 
         foreach ($documents as $document) {
             foreach (($document['extracted_fields'] ?? []) as $field => $candidate) {
-                if (! is_array($candidate) || trim((string) ($candidate['value'] ?? '')) === '') continue;
+                if (! is_array($candidate) || trim((string) ($candidate['value'] ?? '')) === '') {
+                    continue;
+                }
 
                 $confidence = (float) ($candidate['confidence'] ?? 0.5);
                 $value = $candidate['value'];
                 $key = $this->comparableValue($value);
-                if ($key === '') continue;
+                if ($key === '') {
+                    continue;
+                }
 
                 $existing = $candidates[$field][$key] ?? null;
-                if ($existing && $confidence <= (float) $existing['confidence']) continue;
+                if ($existing && $confidence <= (float) $existing['confidence']) {
+                    continue;
+                }
 
                 $candidates[$field][$key] = [
                     'value' => $value,
@@ -824,8 +859,12 @@ class SmartRegistrationController extends Controller
         $confirmed = [];
 
         foreach ($this->decodeJson($profile->confirmed_sources ?? null) as $section) {
-            if (! is_array($section)) continue;
-            foreach ($section as $field => $source) $confirmed[$field] = $source;
+            if (! is_array($section)) {
+                continue;
+            }
+            foreach ($section as $field => $source) {
+                $confirmed[$field] = $source;
+            }
         }
 
         $missingNames = array_fill_keys(array_map(
@@ -841,7 +880,9 @@ class SmartRegistrationController extends Controller
         $statuses = [];
 
         foreach ($fields as $field) {
-            if ($field === 'confirmed_sources' || $field === 'last_extracted_at') continue;
+            if ($field === 'confirmed_sources' || $field === 'last_extracted_at') {
+                continue;
+            }
             $value = $current[$field] ?? null;
             $hasValue = $value !== null && trim((string) $value) !== '';
             $suggestion = $suggestions[$field] ?? null;
@@ -873,6 +914,7 @@ class SmartRegistrationController extends Controller
     private function comparableValue(mixed $value): string
     {
         $normalized = mb_strtolower(trim((string) $value));
+
         return preg_replace('/[^\pL\pN]+/u', '', $normalized) ?? $normalized;
     }
 
@@ -909,7 +951,7 @@ class SmartRegistrationController extends Controller
         }
 
         $text = $this->normalizeExtractedText($text);
-        $documentType = $this->detectDocumentType($name . "\n" . mb_substr($text, 0, 12000));
+        $documentType = $this->detectDocumentType($name."\n".mb_substr($text, 0, 12000));
         $fields = $text !== '' ? $this->extractFields($text, $documentType) : [];
 
         return [
@@ -922,14 +964,20 @@ class SmartRegistrationController extends Controller
 
     private function extractDocxText(string $path): string
     {
-        if (! class_exists(\ZipArchive::class)) return '';
+        if (! class_exists(\ZipArchive::class)) {
+            return '';
+        }
 
-        $zip = new \ZipArchive();
-        if ($zip->open($path) !== true) return '';
+        $zip = new \ZipArchive;
+        if ($zip->open($path) !== true) {
+            return '';
+        }
 
         $xml = $zip->getFromName('word/document.xml') ?: '';
         $zip->close();
-        if ($xml === '') return '';
+        if ($xml === '') {
+            return '';
+        }
 
         $xml = preg_replace('/<w:tab[^>]*\/>/i', "\t", $xml) ?? $xml;
         $xml = preg_replace('/<w:br[^>]*\/>/i', "\n", $xml) ?? $xml;
@@ -941,13 +989,17 @@ class SmartRegistrationController extends Controller
     private function extractLegacyDocText(string $path): string
     {
         if ($this->commandAvailable('antiword')) {
-            $output = $this->runCommand('antiword ' . escapeshellarg($path) . ' 2>/dev/null');
-            if (trim($output) !== '') return $output;
+            $output = $this->runCommand('antiword '.escapeshellarg($path).' 2>/dev/null');
+            if (trim($output) !== '') {
+                return $output;
+            }
         }
 
         if ($this->commandAvailable('catdoc')) {
-            $output = $this->runCommand('catdoc ' . escapeshellarg($path) . ' 2>/dev/null');
-            if (trim($output) !== '') return $output;
+            $output = $this->runCommand('catdoc '.escapeshellarg($path).' 2>/dev/null');
+            if (trim($output) !== '') {
+                return $output;
+            }
         }
 
         return '';
@@ -956,26 +1008,30 @@ class SmartRegistrationController extends Controller
     private function extractPdfText(string $path): string
     {
         if ($this->commandAvailable('pdftotext')) {
-            $output = $this->runCommand('pdftotext -layout -enc UTF-8 ' . escapeshellarg($path) . ' -');
-            if (trim($output) !== '') return $output;
+            $output = $this->runCommand('pdftotext -layout -enc UTF-8 '.escapeshellarg($path).' -');
+            if (trim($output) !== '') {
+                return $output;
+            }
         }
 
         if ($this->commandAvailable('gs')) {
             $output = $this->runCommand(
                 'gs -q -dSAFER -dBATCH -dNOPAUSE -sDEVICE=txtwrite -sOutputFile=- '
-                . escapeshellarg($path)
-                . ' 2>/dev/null'
+                .escapeshellarg($path)
+                .' 2>/dev/null'
             );
-            if (trim($output) !== '') return $output;
+            if (trim($output) !== '') {
+                return $output;
+            }
         }
 
         if ($this->commandAvailable('pdftoppm') && $this->commandAvailable('tesseract')) {
-            $tmpBase = storage_path('app/nurselink-smart-registration-ocr-' . Str::random(16));
-            $this->runCommand('pdftoppm -f 1 -singlefile -jpeg -r 180 ' . escapeshellarg($path) . ' ' . escapeshellarg($tmpBase));
-            $image = $tmpBase . '.jpg';
+            $tmpBase = storage_path('app/nurselink-smart-registration-ocr-'.Str::random(16));
+            $this->runCommand('pdftoppm -f 1 -singlefile -jpeg -r 180 '.escapeshellarg($path).' '.escapeshellarg($tmpBase));
+            $image = $tmpBase.'.jpg';
             if (is_file($image)) {
                 try {
-                    return $this->runCommand('tesseract ' . escapeshellarg($image) . ' stdout --psm 6 2>/dev/null');
+                    return $this->runCommand('tesseract '.escapeshellarg($image).' stdout --psm 6 2>/dev/null');
                 } finally {
                     @unlink($image);
                 }
@@ -987,24 +1043,33 @@ class SmartRegistrationController extends Controller
 
     private function extractImageText(string $path): string
     {
-        if (! $this->commandAvailable('tesseract')) return '';
-        return $this->runCommand('tesseract ' . escapeshellarg($path) . ' stdout --psm 6 2>/dev/null');
+        if (! $this->commandAvailable('tesseract')) {
+            return '';
+        }
+
+        return $this->runCommand('tesseract '.escapeshellarg($path).' stdout --psm 6 2>/dev/null');
     }
 
     private function runCommand(string $command): string
     {
-        if (! function_exists('shell_exec')) return '';
+        if (! function_exists('shell_exec')) {
+            return '';
+        }
 
         $disabled = array_map('trim', explode(',', (string) ini_get('disable_functions')));
-        if (in_array('shell_exec', $disabled, true)) return '';
+        if (in_array('shell_exec', $disabled, true)) {
+            return '';
+        }
 
         $output = shell_exec($command);
+
         return is_string($output) ? $output : '';
     }
 
     private function commandAvailable(string $command): bool
     {
-        $output = $this->runCommand('command -v ' . escapeshellarg($command) . ' 2>/dev/null');
+        $output = $this->runCommand('command -v '.escapeshellarg($command).' 2>/dev/null');
+
         return trim($output) !== '';
     }
 
@@ -1025,6 +1090,7 @@ class SmartRegistrationController extends Controller
         $text = str_replace(["\r\n", "\r", "\0"], ["\n", "\n", ' '], $text);
         $text = preg_replace('/[ \t]+/u', ' ', $text) ?? $text;
         $text = preg_replace('/\n{3,}/u', "\n\n", $text) ?? $text;
+
         return trim(mb_substr($text, 0, self::MAX_EXTRACTED_TEXT));
     }
 
@@ -1032,13 +1098,27 @@ class SmartRegistrationController extends Controller
     {
         $value = mb_strtolower($text);
 
-        if (preg_match('/\b(prc|professional regulation commission|registration no|license no|licence no)\b/u', $value)) return 'prc_license';
-        if (preg_match('/\b(passport|national id|identification card|driver.?s license)\b/u', $value)) return 'identity';
-        if (preg_match('/\b(curriculum vitae|\bcv\b|resume|résumé|work experience|employment history)\b/u', $value)) return 'cv';
-        if (preg_match('/\b(diploma|bachelor of science in nursing|bsn|bsc nursing|nursing degree|transcript)\b/u', $value)) return 'nursing_diploma';
-        if (preg_match('/\b(employment certificate|certificate of employment|employment verification)\b/u', $value)) return 'employment_certificate';
-        if (preg_match('/\b(training certificate|certificate of completion|bls|acls|pals|iv therapy)\b/u', $value)) return 'training_certificate';
-        if (preg_match('/\b(nursing council|registered nurse license|registered nurse licence|board of nursing)\b/u', $value)) return 'international_license';
+        if (preg_match('/\b(prc|professional regulation commission|registration no|license no|licence no)\b/u', $value)) {
+            return 'prc_license';
+        }
+        if (preg_match('/\b(passport|national id|identification card|driver.?s license)\b/u', $value)) {
+            return 'identity';
+        }
+        if (preg_match('/\b(curriculum vitae|\bcv\b|resume|résumé|work experience|employment history)\b/u', $value)) {
+            return 'cv';
+        }
+        if (preg_match('/\b(diploma|bachelor of science in nursing|bsn|bsc nursing|nursing degree|transcript)\b/u', $value)) {
+            return 'nursing_diploma';
+        }
+        if (preg_match('/\b(employment certificate|certificate of employment|employment verification)\b/u', $value)) {
+            return 'employment_certificate';
+        }
+        if (preg_match('/\b(training certificate|certificate of completion|bls|acls|pals|iv therapy)\b/u', $value)) {
+            return 'training_certificate';
+        }
+        if (preg_match('/\b(nursing council|registered nurse license|registered nurse licence|board of nursing)\b/u', $value)) {
+            return 'international_license';
+        }
 
         return 'other';
     }
@@ -1069,11 +1149,15 @@ class SmartRegistrationController extends Controller
 
         foreach ($labelPatterns as $field => $labels) {
             $candidate = $this->valueAfterLabel($lines, $labels);
-            if ($candidate === null) continue;
+            if ($candidate === null) {
+                continue;
+            }
 
             if (in_array($field, ['birth_date', 'primary_license_expiry'], true)) {
                 $candidate = $this->normalizeDate($candidate);
-                if ($candidate === null) continue;
+                if ($candidate === null) {
+                    continue;
+                }
             }
 
             $confidence = in_array($field, ['primary_license_number', 'birth_date'], true) ? 0.86 : 0.78;
@@ -1149,34 +1233,47 @@ class SmartRegistrationController extends Controller
     {
         foreach ($lines as $index => $line) {
             foreach ($labels as $label) {
-                $pattern = '/^\s*' . preg_quote($label, '/') . '\s*[:#-]?\s*(.*)$/iu';
-                if (! preg_match($pattern, $line, $match)) continue;
+                $pattern = '/^\s*'.preg_quote($label, '/').'\s*[:#-]?\s*(.*)$/iu';
+                if (! preg_match($pattern, $line, $match)) {
+                    continue;
+                }
 
                 $value = trim((string) ($match[1] ?? ''));
                 if ($value === '' && isset($lines[$index + 1])) {
                     $value = trim((string) $lines[$index + 1]);
                 }
 
-                if ($value !== '' && mb_strlen($value) <= 255) return $value;
+                if ($value !== '' && mb_strlen($value) <= 255) {
+                    return $value;
+                }
             }
         }
+
         return null;
     }
 
     private function normalizeDate(string $value): ?string
     {
         $value = trim($value);
-        if ($value === '') return null;
+        if ($value === '') {
+            return null;
+        }
         $time = strtotime($value);
-        if ($time === false) return null;
+        if ($time === false) {
+            return null;
+        }
         $year = (int) date('Y', $time);
-        if ($year < 1900 || $year > now()->year + 30) return null;
+        if ($year < 1900 || $year > now()->year + 30) {
+            return null;
+        }
+
         return date('Y-m-d', $time);
     }
 
     private function normalizeEducation(string $value): string
     {
         $key = mb_strtolower(trim($value));
+
         return match (true) {
             str_contains($key, 'master'), $key === 'msn' => 'Master of Science in Nursing',
             str_contains($key, 'doctor'), $key === 'dnp' => 'Doctor of Nursing Practice',
@@ -1187,9 +1284,14 @@ class SmartRegistrationController extends Controller
 
     private function decodeJson(mixed $value): array
     {
-        if (is_array($value)) return $value;
-        if (! is_string($value) || trim($value) === '') return [];
+        if (is_array($value)) {
+            return $value;
+        }
+        if (! is_string($value) || trim($value) === '') {
+            return [];
+        }
         $decoded = json_decode($value, true);
+
         return is_array($decoded) ? $decoded : [];
     }
 }

@@ -140,7 +140,7 @@ Artisan::command('nurselink:integration-check {--deep}', function () {
 
     if ($this->option('deep')) {
         if ((string) config('security_scanning.driver') === 'disabled') {
-            $record('malware-scanner', true, 'Disabled for cPanel pilot; uploaded documents remain pending until a scanner/manual review workflow is configured.');
+            $record('malware-scanner', true, 'Disabled for this deployment; uploaded documents remain pending until a scanner/manual review workflow is configured.');
         } else {
             try {
                 $host = (string) config('security_scanning.clamav.host');

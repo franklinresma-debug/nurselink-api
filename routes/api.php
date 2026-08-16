@@ -59,7 +59,6 @@ Route::middleware(['auth:sanctum', 'verified', 'active.user'])->group(function (
         Route::post('/applications/{application}/submit', [ApplicationActionController::class, 'submit']);
         Route::post('/applications/{application}/resubmit', [ApplicationActionController::class, 'resubmit']);
 
-        Route::get('/smart-registration', [SmartRegistrationController::class, 'overview']);
         Route::post('/applications/{application}/documents', [SmartRegistrationController::class, 'upload']);
         Route::post('/documents/{document}/extract', [SmartRegistrationController::class, 'extract'])->middleware('permission:document.extract.own');
         Route::post('/extracted-facts/{fact}/confirm', [SmartRegistrationController::class, 'confirmFact']);

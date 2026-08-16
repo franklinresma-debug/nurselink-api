@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\SmartRegistration\LocalOcrService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -115,6 +116,20 @@ class ProductionReadinessController extends Controller
             'critical',
             'Application logging directory is writable.');
 
+        $ocr = app(LocalOcrService::class)->capabilities();
+        $this->add($checks, 'ocr_image', 'Smart Registration image OCR',
+            (bool) ($ocr['image_ocr'] ?? false), 'critical',
+            'Tesseract OCR is available to PHP for JPG and PNG evidence.');
+        $this->add($checks, 'ocr_pdf', 'Smart Registration PDF extraction',
+            (bool) ($ocr['pdf_text'] ?? false), 'critical',
+            'Poppler or Ghostscript is available for PDF text extraction.');
+        $this->add($checks, 'ocr_scanned_pdf', 'Smart Registration scanned PDF OCR',
+            (bool) ($ocr['pdf_scan_ocr'] ?? false), 'warning',
+            'Poppler and Tesseract can process image-based PDF evidence.');
+        $this->add($checks, 'malware_scanner', 'Uploaded-document malware scanner',
+            (string) config('security_scanning.driver') !== 'disabled', 'warning',
+            'A malware scanner must clear uploaded evidence before it is trusted.');
+
         $envPath = base_path('.env');
         $envMode = @fileperms($envPath);
         $envWorldReadable = is_int($envMode) && (($envMode & 0x0004) !== 0);
@@ -140,7 +155,7 @@ class ProductionReadinessController extends Controller
             'At least 10% filesystem capacity remains available.');
 
         $backupAgeHours = $this->latestBackupAgeHours(
-            '/home/frankresma/nurselink-backups'
+            (string) config('operations.backup.root', '')
         );
 
         $this->add($checks, 'recent_backup', 'Recent NurseLink rollback backup',
@@ -148,19 +163,27 @@ class ProductionReadinessController extends Controller
             'warning',
             'A NurseLink backup exists from within the last 7 days.');
 
-        $liveHtaccess = '/home/frankresma/app.amsertech.com/.htaccess';
+        $securityPolicyPath = (string) config(
+            'operations.security_headers_policy_path',
+            ''
+        );
+        $securityPolicyMarker = (string) config(
+            'operations.security_headers_policy_marker',
+            'NURSELINK_SECURITY_HEADERS_V330_START'
+        );
 
-        $securityHeadersInstalled = is_file($liveHtaccess)
+        $securityHeadersInstalled = $securityPolicyPath !== ''
+            && is_file($securityPolicyPath)
             && str_contains(
-                (string) @file_get_contents($liveHtaccess),
-                'NURSELINK_SECURITY_HEADERS_V330_START'
+                (string) @file_get_contents($securityPolicyPath),
+                $securityPolicyMarker
             );
 
         $this->add($checks, 'security_headers_policy',
             'Baseline browser security headers policy',
             $securityHeadersInstalled,
             'warning',
-            'The NurseLink v3.3 baseline security-header policy is installed.');
+            'The configured web-server security-header policy is installed.');
 
         $logHealth = $this->recentLogHealth();
 
@@ -236,7 +259,7 @@ class ProductionReadinessController extends Controller
 
         return response()->json([
             'data' => [
-                'release' => '5.5.8',
+                'release' => (string) config('operations.release'),
                 'generated_at' => now()->toIso8601String(),
                 'status' => $criticalFailed === 0
                     ? ($warningFailed === 0
@@ -337,10 +360,6 @@ class ProductionReadinessController extends Controller
         $latest = null;
 
         foreach (glob(rtrim($root, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . '*') ?: [] as $path) {
-            if (!is_dir($path)) {
-                continue;
-            }
-
             $mtime = @filemtime($path);
 
             if ($mtime !== false && ($latest === null || $mtime > $latest)) {

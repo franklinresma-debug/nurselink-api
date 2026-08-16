@@ -14,10 +14,19 @@ class ClamAvScanner
     {
         $host = (string) config('security_scanning.clamav.host');
         $port = (int) config('security_scanning.clamav.port');
+        $socketPath = trim((string) config('security_scanning.clamav.socket', ''));
         $timeout = (int) config('security_scanning.clamav.timeout_seconds', 30);
         $chunkBytes = (int) config('security_scanning.clamav.chunk_bytes', 1048576);
 
-        $socket = @fsockopen($host, $port, $errno, $errstr, $timeout);
+        $socket = $socketPath !== ''
+            ? @stream_socket_client(
+                'unix://'.$socketPath,
+                $errno,
+                $errstr,
+                $timeout,
+                STREAM_CLIENT_CONNECT
+            )
+            : @fsockopen($host, $port, $errno, $errstr, $timeout);
         if (! $socket) {
             throw new RuntimeException("ClamAV connection failed: {$errstr} ({$errno})");
         }
@@ -61,6 +70,14 @@ class ClamAvScanner
             fclose($socket);
         }
 
+        return $this->classifyResponse($response);
+    }
+
+    /**
+     * @return array{status:string,response:string}
+     */
+    public function classifyResponse(string $response): array
+    {
         $response = trim(str_replace("\0", '', $response));
         if (str_contains($response, ' FOUND')) {
             return ['status' => 'infected', 'response' => $response];
