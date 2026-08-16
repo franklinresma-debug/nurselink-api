@@ -1,0 +1,16 @@
+<?php
+namespace App\Services\Communications;
+use App\Models\CampaignRecipient; use App\Models\DeliveryAttempt; use App\Models\InboxMessage; use App\Models\User; use App\Services\Communications\Channels\EmailChannelProvider; use App\Services\Communications\Channels\UnconfiguredChannelProvider;
+class DeliveryService {
+ public function __construct(private PreferenceService $preferences,private TemplateRenderer $renderer){}
+ public function deliver(User $user,string $category,string $subject,string $body,array $channels,array $context=[],?CampaignRecipient $recipient=null):array{
+  $resolved=$this->preferences->resolveChannels($user,$category,$channels);$results=[];$inbox=null;$subject=$this->renderer->render($subject,$user,$context);$body=$this->renderer->render($body,$user,$context);$baseDedupe=$context['dedupe_key']??($recipient?'campaign:'.$recipient->campaign_id.':'.$user->id:null);
+  foreach($resolved['resolved'] as $channel){$attemptDedupe=$baseDedupe?$baseDedupe.':'.$channel:null;$existing=$attemptDedupe?DeliveryAttempt::query()->where('channel',$channel)->where('dedupe_key',$attemptDedupe)->whereIn('status',['sent','delivered','skipped','suppressed'])->first():null;if($existing){$results[$channel]=['status'=>$existing->status,'provider'=>$existing->provider,'provider_message_id'=>$existing->provider_message_id,'idempotent'=>true];continue;}
+   if($channel==='in_app'){$attrs=['user_id'=>$user->id,'campaign_id'=>$recipient?->campaign_id,'source_type'=>$context['source_type']??null,'source_id'=>$context['source_id']??null,'category'=>$category,'subject'=>$subject,'body'=>$body,'action_url'=>$context['action_url']??null,'priority'=>$context['priority']??'normal','published_at'=>now()];$inbox=$baseDedupe?InboxMessage::query()->firstOrCreate(['dedupe_key'=>$baseDedupe],$attrs):InboxMessage::query()->create($attrs);$result=['status'=>'delivered','provider'=>'nurselink_inbox','provider_message_id'=>$inbox->id];}
+   else {$provider=$channel==='email'&&config('communications.external_providers.email')==='laravel_mail'?new EmailChannelProvider():new UnconfiguredChannelProvider($channel);$result=$provider->send($user,$subject,$body,$context);}
+   DeliveryAttempt::query()->create(['campaign_recipient_id'=>$recipient?->id,'inbox_message_id'=>$inbox?->id,'user_id'=>$user->id,'channel'=>$channel,'dedupe_key'=>$attemptDedupe,'provider'=>$result['provider'],'status'=>$result['status'],'provider_message_id'=>$result['provider_message_id']??null,'error_code'=>$result['error_code']??null,'error_message'=>$result['error_message']??null,'attempted_at'=>now(),'delivered_at'=>$result['status']==='delivered'?now():null]);$results[$channel]=$result;
+  }
+  foreach($resolved['suppressed'] as $channel=>$reason){$attemptDedupe=$baseDedupe?$baseDedupe.':'.$channel:null;$existing=$attemptDedupe?DeliveryAttempt::query()->where('channel',$channel)->where('dedupe_key',$attemptDedupe)->first():null;if(!$existing)DeliveryAttempt::query()->create(['campaign_recipient_id'=>$recipient?->id,'user_id'=>$user->id,'channel'=>$channel,'dedupe_key'=>$attemptDedupe,'provider'=>'preference_engine','status'=>'suppressed','error_code'=>$reason,'attempted_at'=>now()]);$results[$channel]=['status'=>'suppressed','reason'=>$reason];}
+  return ['results'=>$results,'inbox'=>$inbox,'resolved'=>$resolved];
+ }
+}

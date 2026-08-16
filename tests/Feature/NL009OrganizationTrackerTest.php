@@ -1,0 +1,8 @@
+<?php
+namespace Tests\Feature;
+use App\Models\Initiative; use App\Models\PolicyRecord; use App\Models\User; use App\Services\Organization\InitiativeProgressService; use App\Services\Organization\PolicyLifecycleService; use Illuminate\Foundation\Testing\RefreshDatabase; use Illuminate\Validation\ValidationException; use Tests\TestCase;
+class NL009OrganizationTrackerTest extends TestCase { use RefreshDatabase;
+ public function test_milestones_calculate_weighted_progress():void{$u=User::factory()->create();$i=Initiative::query()->create(['initiative_no'=>'NLP-T-1','type'=>'program','title'=>'Test','status'=>'active','owner_user_id'=>$u->id]);$i->milestones()->create(['title'=>'A','status'=>'completed','weight'=>2]);$i->milestones()->create(['title'=>'B','status'=>'planned','weight'=>2]);$out=app(InitiativeProgressService::class)->refresh($i);$this->assertSame(50.0,(float)$out->progress_percent);}
+ public function test_policy_lifecycle_rejects_skipping_governance_stages():void{$u=User::factory()->create();$p=PolicyRecord::query()->create(['policy_no'=>'NLPL-T-1','title'=>'Test Policy','status'=>'proposed','owner_user_id'=>$u->id]);$this->expectException(ValidationException::class);app(PolicyLifecycleService::class)->transition($p,'submitted',$u);}
+ public function test_policy_can_move_from_proposed_to_research():void{$u=User::factory()->create();$p=PolicyRecord::query()->create(['policy_no'=>'NLPL-T-2','title'=>'Test Policy','status'=>'proposed','owner_user_id'=>$u->id]);$out=app(PolicyLifecycleService::class)->transition($p,'research',$u,'Research initiated.');$this->assertSame('research',$out->status);$this->assertDatabaseHas('policy_stage_events',['policy_record_id'=>$p->id,'from_status'=>'proposed','to_status'=>'research']);}
+}

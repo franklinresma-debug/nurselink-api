@@ -1,0 +1,18 @@
+NurseLink NL-011.2 cPanel API Upload Validation
+===============================================
+Target: /home/frankresma/nurselink-api
+Package: NurseLink_NL-011.2_cPanel_API_Upload.zip
+PHP syntax files checked: 235
+PHP syntax failures: 0
+composer.json: valid JSON
+Route controller reference check: PASS
+PostgreSQL-specific query/jsonb compatibility scan: PASS
+Database mode: MySQL/MariaDB
+Session mode: database
+Cache mode: database
+Queue mode: database
+Private storage: local private filesystem
+ClamAV: disabled by default on shared cPanel; documents remain pending until security-cleared
+ZIP integrity: PASS
+
+Runtime Composer resolution, migrations and endpoint tests must be run on the Namecheap account after extraction.

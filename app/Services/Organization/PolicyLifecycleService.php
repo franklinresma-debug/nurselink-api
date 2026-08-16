@@ -1,0 +1,7 @@
+<?php
+namespace App\Services\Organization;
+use App\Models\PolicyRecord; use App\Models\PolicyStageEvent; use App\Models\User; use App\Services\AuditLogger; use Illuminate\Support\Facades\DB; use Illuminate\Validation\ValidationException;
+class PolicyLifecycleService {
+ public function __construct(private AuditLogger $audit,private OrganizationCommunicationService $communications){}
+ public function transition(PolicyRecord $policy,string $to,User $actor,?string $note=null,bool $notify=false,array $audience=[]):PolicyRecord{return DB::transaction(function()use($policy,$to,$actor,$note,$notify,$audience){$from=$policy->status;$allowed=config('organization.policy_transitions.'.$from,[]);if(!in_array($to,$allowed,true))throw ValidationException::withMessages(['status'=>"Transition {$from} → {$to} is not allowed."]);$attrs=['status'=>$to];if($to==='submitted')$attrs['submitted_at']=now();if($to==='adopted')$attrs['adopted_at']=now();$policy->update($attrs);$event=PolicyStageEvent::query()->create(['policy_record_id'=>$policy->id,'from_status'=>$from,'to_status'=>$to,'note'=>$note,'occurred_at'=>now(),'changed_by'=>$actor->id,'notify_members'=>$notify,'audience_filters'=>$audience?:null]);$this->audit->write('policy.stage_changed',$actor,'policy_record',$policy->id,['policy_no'=>$policy->policy_no,'from'=>$from,'to'=>$to]);if($notify)$this->communications->policyStageChanged($policy,$event,$audience);return $policy->refresh();});}
+}

@@ -1,0 +1,4 @@
+<?php
+namespace App\Models;
+use Illuminate\Database\Eloquent\Concerns\HasUuids; use Illuminate\Database\Eloquent\Model; use Illuminate\Database\Eloquent\Relations\BelongsTo; use Illuminate\Database\Eloquent\Relations\HasMany;
+class PolicyRecord extends Model { use HasUuids; protected $guarded=[]; protected function casts():array{return ['submitted_at'=>'datetime','adopted_at'=>'datetime','published_at'=>'datetime','audience_filters'=>'array'];} public function owner():BelongsTo{return $this->belongsTo(User::class,'owner_user_id');} public function stageEvents():HasMany{return $this->hasMany(PolicyStageEvent::class,'policy_record_id');} public function stakeholders():HasMany{return $this->hasMany(PolicyStakeholder::class,'policy_record_id');} public function documents():HasMany{return $this->hasMany(PolicyDocument::class,'policy_record_id');} }

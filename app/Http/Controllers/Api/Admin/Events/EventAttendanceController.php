@@ -1,0 +1,4 @@
+<?php
+namespace App\Http\Controllers\Api\Admin\Events;
+use App\Http\Controllers\Controller; use App\Models\EventRegistration; use App\Services\Events\CertificateService; use Illuminate\Http\JsonResponse; use Illuminate\Http\Request;
+class EventAttendanceController extends Controller { public function record(Request $r,EventRegistration $registration,CertificateService $certs):JsonResponse{$d=$r->validate(['attended'=>['required','boolean'],'issue_certificate'=>['sometimes','boolean']]);$registration->update(['status'=>$d['attended']?'attended':'no_show','attended_at'=>$d['attended']?now():null,'attendance_recorded_by'=>$r->user()->id]);$cert=null;if($d['attended']&&($d['issue_certificate']??false))$cert=$certs->issue($registration->fresh('event'),$r->user()->id);return response()->json(['data'=>$registration->fresh(['member.profile','event','certificate']),'certificate'=>$cert]);} }

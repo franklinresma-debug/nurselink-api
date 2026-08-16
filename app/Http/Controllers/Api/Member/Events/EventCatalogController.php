@@ -1,0 +1,10 @@
+<?php
+namespace App\Http\Controllers\Api\Member\Events;
+use App\Http\Controllers\Controller; use App\Models\Event; use App\Models\EventRegistration; use App\Models\Member; use App\Services\Events\EventEligibilityService; use App\Services\Events\EventRegistrationService; use Illuminate\Http\JsonResponse; use Illuminate\Http\Request;
+class EventCatalogController extends Controller {
+ private function member(Request $r):Member{return Member::query()->with(['user.roles','profile'])->where('user_id',$r->user()->id)->firstOrFail();}
+ public function index(Request $r,EventEligibilityService $eligibility):JsonResponse{$m=$this->member($r);$events=Event::query()->where('status','published')->where('ends_at','>=',now())->orderBy('starts_at')->get()->filter(fn($e)=>$eligibility->eligible($m,$e))->map(function($e)use($m){$reg=$e->registrations()->where('member_id',$m->id)->first();return array_merge($e->toArray(),['my_registration'=>$reg?->only(['id','status','registered_at'])]);})->values();return response()->json(['data'=>$events]);}
+ public function show(Request $r,Event $event,EventEligibilityService $eligibility):JsonResponse{abort_unless($event->status==='published',404);$m=$this->member($r);abort_unless($eligibility->eligible($m,$event),404);$data=$event->toArray();if(in_array($event->format,['online','hybrid'],true)&&$event->registrations()->where('member_id',$m->id)->whereIn('status',['registered','attended'])->exists())$data['online_url']=$event->online_url;$data['my_registration']=$event->registrations()->where('member_id',$m->id)->first();return response()->json(['data'=>$data]);}
+ public function register(Request $r,Event $event,EventRegistrationService $s,EventEligibilityService $eligibility):JsonResponse{$m=$this->member($r);abort_unless($eligibility->eligible($m,$event),404);return response()->json(['data'=>$s->register($m,$event)],201);}
+ public function cancel(Request $r,EventRegistration $registration,EventRegistrationService $s):JsonResponse{return response()->json(['data'=>$s->cancel($this->member($r),$registration)]);}
+}

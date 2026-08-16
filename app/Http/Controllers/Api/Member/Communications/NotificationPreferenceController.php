@@ -1,0 +1,4 @@
+<?php
+namespace App\Http\Controllers\Api\Member\Communications;
+use App\Http\Controllers\Controller; use App\Http\Requests\Communications\UpdateNotificationPreferencesRequest; use App\Services\Communications\PreferenceService; use Illuminate\Http\JsonResponse; use Illuminate\Http\Request;
+class NotificationPreferenceController extends Controller { public function show(Request $r,PreferenceService $s):JsonResponse{return response()->json(['data'=>$s->get($r->user()),'mandatory_categories'=>config('communications.mandatory_categories')]);} public function update(UpdateNotificationPreferencesRequest $r,PreferenceService $s):JsonResponse{$p=$s->get($r->user());$p->update($r->validated());return response()->json(['data'=>$p->fresh(),'mandatory_categories'=>config('communications.mandatory_categories')]);} }

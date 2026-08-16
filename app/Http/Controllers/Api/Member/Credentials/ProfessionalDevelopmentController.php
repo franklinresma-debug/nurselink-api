@@ -1,0 +1,12 @@
+<?php
+namespace App\Http\Controllers\Api\Member\Credentials;
+use App\Http\Controllers\Controller; use App\Http\Requests\Credentials\UpsertProfessionalDevelopmentRequest; use App\Models\Member; use App\Models\MemberDocument; use App\Models\ProfessionalDevelopmentRecord; use App\Services\AuditLogger; use Illuminate\Http\JsonResponse; use Illuminate\Http\Request;
+class ProfessionalDevelopmentController extends Controller
+{
+    public function index(Request $request):JsonResponse{$m=$this->member($request);return response()->json(['data'=>$m->professionalDevelopment()->with('evidenceDocument')->orderByDesc('completed_on')->get()]);}
+    public function store(UpsertProfessionalDevelopmentRequest $request,AuditLogger $audit):JsonResponse{$m=$this->member($request);$data=$request->validated();$this->validateDocument($m,$data['evidence_document_id']??null);$row=$m->professionalDevelopment()->create($data+['status'=>'self_declared']);$audit->write('professional_development.created',$request->user(),'professional_development_record',$row->id,['record_type'=>$row->record_type],$request);return response()->json(['data'=>$row],201);}
+    public function update(UpsertProfessionalDevelopmentRequest $request,ProfessionalDevelopmentRecord $record,AuditLogger $audit):JsonResponse{$m=$this->member($request);abort_unless($record->member_id===$m->id,403);$data=$request->validated();$this->validateDocument($m,$data['evidence_document_id']??null);$record->update($data+['status'=>'self_declared','verified_by'=>null,'verified_at'=>null]);$audit->write('professional_development.updated',$request->user(),'professional_development_record',$record->id,[],$request);return response()->json(['data'=>$record->fresh()]);}
+    public function destroy(Request $request,ProfessionalDevelopmentRecord $record,AuditLogger $audit):JsonResponse{$m=$this->member($request);abort_unless($record->member_id===$m->id,403);$audit->write('professional_development.deleted',$request->user(),'professional_development_record',$record->id,[],$request);$record->delete();return response()->json([],204);}
+    private function member(Request $r):Member{return Member::query()->where('user_id',$r->user()->id)->firstOrFail();}
+    private function validateDocument(Member $m,?string $id):void{if($id)abort_unless(MemberDocument::query()->where('member_id',$m->id)->whereKey($id)->exists(),422,'Evidence document does not belong to this member.');}
+}

@@ -1,0 +1,21 @@
+<?php
+namespace Database\Seeders;
+use App\Models\MessageTemplate; use Illuminate\Database\Seeder;
+class CommunicationTemplateSeeder extends Seeder { public function run():void{$rows=[
+ ['application_submitted','Application received','membership_status','Application {{application_no}} received','Thank you, {{name}}. Your NurseLink membership application {{application_no}} has been received and is awaiting review.'],
+ ['application_returned_for_information','Application needs information','membership_status','Action needed for {{application_no}}','Your NurseLink application needs additional information. {{note}} Open My Application to review the request.'],
+ ['application_approved','Membership approved','membership_status','Welcome to NurseLink','Congratulations, {{name}}. Your NurseLink membership has been approved. Your member number is {{member_number}}.'],
+ ['application_rejected','Application decision','membership_status','Update on {{application_no}}','A decision has been recorded for your NurseLink application. Open My Application for the official status and any notes.'],
+ ['credential_90_day','Credential renewal: 90 days','credentials','Renewal reminder: {{credential_title}}','Your {{credential_title}} is approaching its renewal window. Current expiry: {{expires_on}}. Review your credential record and renewal requirements.'],
+ ['credential_60_day','Credential renewal: 60 days','credentials','Renewal due soon: {{credential_title}}','Your {{credential_title}} is due to expire on {{expires_on}}. Please review renewal requirements and upload updated evidence when available.'],
+ ['credential_30_day','Credential renewal: 30 days','credentials','Priority renewal: {{credential_title}}','Your {{credential_title}} is within 30 days of expiry ({{expires_on}}). Please prioritize renewal and update NurseLink after completion.'],
+ ['credential_expired','Credential expired','credentials','Credential alert: {{credential_title}}','Your NurseLink record indicates that {{credential_title}} has reached its recorded expiry date. Review the credential and update its status or renewal evidence.'],
+ ['qualification_assessed','Qualification assessment reviewed','qualifications','Qualification assessment update','Your NurseLink evidence-readiness assessment for {{framework}} has been reviewed. Current readiness score: {{readiness_score}}. Open Qualifications to view the assessment and next actions.'],
+ ['event_registration_confirmed','Event registration confirmation','event_service','Registration update: {{event_title}}','Your registration status for {{event_title}} is {{registration_status}}. The event starts on {{event_starts_at}}. Open Events for the latest schedule and access details.'],
+ ['event_waitlist_promoted','Event waitlist promotion','event_service','A seat is available: {{event_title}}','A seat became available and your registration for {{event_title}} is now confirmed. The event starts on {{event_starts_at}}.'],
+ ['event_cancelled','Event cancelled','event_service','Cancelled: {{event_title}}','{{event_title}} has been cancelled by the organizer. Open Events for the latest information.'],
+ ['event_reminder_7d','Event reminder: 7 days','events','Next week: {{event_title}}','Reminder: {{event_title}} starts on {{event_starts_at}}. Open Events to review the schedule and participation details.'],
+ ['event_reminder_1d','Event reminder: 1 day','events','Tomorrow: {{event_title}}','Reminder: {{event_title}} is scheduled for {{event_starts_at}}. Open Events for final participation details.'],
+ ['initiative_update','Program / project update','programs','Update: {{initiative_title}}','{{update_title}} — {{update_body}} Open Programs & Projects to view the current status of {{initiative_no}}.'],
+ ['policy_stage_changed','Policy tracker update','programs','Policy update: {{policy_title}}','{{policy_no}} has moved to {{policy_stage}}. {{note}} Open the Policy Tracker for the full timeline and supporting information.'],
+ ];foreach($rows as [$code,$name,$category,$subject,$body])MessageTemplate::query()->updateOrCreate(['code'=>$code],['name'=>$name,'category'=>$category,'subject_template'=>$subject,'body_template'=>$body,'governance_status'=>'published']);} }

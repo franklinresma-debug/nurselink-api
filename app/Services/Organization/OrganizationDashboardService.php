@@ -1,0 +1,4 @@
+<?php
+namespace App\Services\Organization;
+use App\Models\Initiative; use App\Models\PolicyRecord;
+class OrganizationDashboardService { public function snapshot():array{$initiatives=Initiative::query();$policies=PolicyRecord::query();return ['initiatives'=>['total'=>(clone $initiatives)->count(),'active'=>(clone $initiatives)->where('status','active')->count(),'completed'=>(clone $initiatives)->where('status','completed')->count(),'avg_progress'=>round((float)((clone $initiatives)->whereIn('status',['planning','active','on_hold'])->avg('progress_percent')??0),1)],'policies'=>['total'=>(clone $policies)->count(),'in_development'=>(clone $policies)->whereIn('status',['research','drafting','consultation'])->count(),'submitted'=>(clone $policies)->whereIn('status',['submitted','deliberation'])->count(),'adopted'=>(clone $policies)->where('status','adopted')->count()],'generated_at'=>now()->toIso8601String()];} }

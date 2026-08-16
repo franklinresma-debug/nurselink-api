@@ -1,0 +1,10 @@
+<?php
+namespace App\Http\Controllers\Api\Admin\Qualifications;
+use App\Http\Controllers\Controller; use App\Http\Requests\Qualifications\ReviewQualificationAssessmentRequest; use App\Models\QualificationAssessment; use App\Services\AuditLogger; use Illuminate\Http\JsonResponse; use Illuminate\Http\Request;
+class AssessmentReviewController extends Controller
+{
+    public function index(Request $r):JsonResponse{$q=QualificationAssessment::query()->with(['member.user','framework','targetLevel'])->whereIn('status',['submitted','under_review','returned','assessed'])->latest();if($r->filled('status'))$q->where('status',$r->string('status'));return response()->json(['data'=>$q->paginate(30),'disclaimer'=>config('qualification.disclaimer')]);}
+    public function show(QualificationAssessment $assessment):JsonResponse{return response()->json(['data'=>$assessment->load(['member.user','framework','targetLevel','results.requirement','recommendations']),'disclaimer'=>config('qualification.disclaimer')]);}
+    public function start(Request $r,QualificationAssessment $assessment,AuditLogger $audit):JsonResponse{abort_unless($assessment->status==='submitted',422);$assessment->update(['status'=>'under_review','assessed_by'=>$r->user()->id]);$audit->write('qualification.assessment_review_started',$r->user(),QualificationAssessment::class,$assessment->id,[],$r);return response()->json(['data'=>$assessment->fresh()]);}
+    public function decision(ReviewQualificationAssessmentRequest $r,QualificationAssessment $assessment,AuditLogger $audit):JsonResponse{abort_unless(in_array($assessment->status,['submitted','under_review'],true),422);$decision=$r->validated('decision');$assessment->update(['status'=>$decision,'assessed_by'=>$r->user()->id,'assessed_at'=>$decision==='assessed'?now():null,'assessor_note'=>$r->validated('assessor_note')]);$audit->write('qualification.assessment_'.$decision,$r->user(),QualificationAssessment::class,$assessment->id,['decision'=>$decision],$r);return response()->json(['data'=>$assessment->fresh(),'disclaimer'=>config('qualification.disclaimer')]);}
+}

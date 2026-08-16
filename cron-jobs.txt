@@ -1,0 +1,16 @@
+NurseLink cPanel cron jobs
+=========================
+
+Use cPanel > Advanced > Cron Jobs.
+Namecheap shared hosting requires cron intervals of 5 minutes or longer.
+
+1) Laravel Scheduler - every 5 minutes
+*/5 * * * * cd /home/frankresma/nurselink-api && /usr/local/bin/php artisan schedule:run >> /home/frankresma/nurselink-api/storage/logs/cron-schedule.log 2>&1
+
+2) Database Queue Worker - every 5 minutes
+*/5 * * * * cd /home/frankresma/nurselink-api && /usr/local/bin/php artisan queue:work database --stop-when-empty --tries=3 --timeout=50 >> /home/frankresma/nurselink-api/storage/logs/cron-queue.log 2>&1
+
+IMPORTANT
+- Test both commands first in cPanel > Manage Shell.
+- If `php -v` differs from the selected PHP 8.4 runtime, run `which php` and use the correct PHP CLI path.
+- Do not add a permanent queue daemon on Namecheap Shared Hosting.

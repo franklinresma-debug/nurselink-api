@@ -1,0 +1,8 @@
+<?php
+namespace App\Services\Privacy;
+use App\Models\PrivacyRequest; use App\Models\User; use App\Services\AuditLogger; use Illuminate\Support\Facades\DB; use Illuminate\Support\Str; use Illuminate\Validation\ValidationException;
+class PrivacyRequestService {
+ public function __construct(private AuditLogger $audit){}
+ public function submit(User $user,string $type,?string $details=null):PrivacyRequest{if(!in_array($type,config('privacy.request_types',[]),true))throw ValidationException::withMessages(['request_type'=>'Unsupported request type.']);return DB::transaction(function()use($user,$type,$details){$no='NLR-'.now()->format('Y').'-'.str_pad((string)(PrivacyRequest::query()->whereYear('created_at',now()->year)->count()+1),6,'0',STR_PAD_LEFT);$r=PrivacyRequest::query()->create(['request_no'=>$no,'user_id'=>$user->id,'request_type'=>$type,'status'=>'submitted','details'=>$details,'submitted_at'=>now()]);$this->audit->write('privacy.request_submitted',$user,'privacy_request',$r->id,['request_no'=>$no,'request_type'=>$type]);return $r;});}
+ public function transition(PrivacyRequest $request,string $status,User $actor,?string $note=null):PrivacyRequest{$allowed=['acknowledged','in_progress','completed','declined'];if(!in_array($status,$allowed,true))throw ValidationException::withMessages(['status'=>'Unsupported privacy request status.']);$attrs=['status'=>$status,'resolution_note'=>$note];if($status==='acknowledged')$attrs['acknowledged_at']=now();if(in_array($status,['completed','declined'],true))$attrs['completed_at']=now();$request->update($attrs);$this->audit->write('privacy.request_status_changed',$actor,'privacy_request',$request->id,['request_no'=>$request->request_no,'status'=>$status]);return $request->refresh();}
+}

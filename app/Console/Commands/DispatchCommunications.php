@@ -1,0 +1,4 @@
+<?php
+namespace App\Console\Commands;
+use App\Models\CommunicationCampaign; use App\Services\Communications\CampaignService; use App\Services\Communications\TriggerBridgeService; use Illuminate\Console\Command;
+class DispatchCommunications extends Command { protected $signature='nurselink:communications-dispatch {--ingest}'; protected $description='Process NurseLink trigger notifications and due communication campaigns'; public function handle(TriggerBridgeService $triggers,CampaignService $campaigns):int{if($this->option('ingest'))$this->info('Triggers ingested: '.$triggers->ingest());$this->info('Triggers processed: '.$triggers->process());$count=0;CommunicationCampaign::query()->where('status','scheduled')->where('scheduled_at','<=',now())->orderBy('scheduled_at')->get()->each(function($c)use($campaigns,&$count){$campaigns->dispatch($c);$count++;});$this->info('Campaigns dispatched: '.$count);return self::SUCCESS;} }
