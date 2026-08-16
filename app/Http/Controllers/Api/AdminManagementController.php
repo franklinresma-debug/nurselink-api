@@ -859,9 +859,11 @@ class AdminManagementController extends Controller
         abort_unless($access['is_super_admin'], 403, 'Super Administrator access is required to manage NurseLink administrators.');
     }
 
-    private function legacyAccess($user): array
+    private function legacyAccess(object $user): array
     {
-        $userId = $user->getKey();
+        $userId = method_exists($user, 'getKey')
+            ? (string) $user->getKey()
+            : (string) ($user->id ?? '');
         $reviewerAccess = Schema::hasTable('nurselink_reviewer_access')
             ? DB::table('nurselink_reviewer_access')->where('user_id', $userId)->where('active', true)->first()
             : null;
