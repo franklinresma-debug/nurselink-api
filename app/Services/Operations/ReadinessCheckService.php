@@ -5,6 +5,7 @@ use App\Models\OperationalCheckRun;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class ReadinessCheckService
 {
@@ -15,10 +16,17 @@ class ReadinessCheckService
         $checks['database'] = $this->probe(fn () => DB::select('select 1'), 'Database query successful.');
 
         $checks['cache'] = $this->probe(function () {
-            Cache::put('nurselink:ready', now()->timestamp, 10);
-            $value = Cache::get('nurselink:ready');
-            Cache::forget('nurselink:ready');
-            if ($value === null) throw new \RuntimeException('Cache probe value could not be read back.');
+            $key = 'nurselink:ready:'.Str::uuid();
+            $expected = Str::uuid()->toString();
+
+            try {
+                Cache::put($key, $expected, 10);
+                if (Cache::get($key) !== $expected) {
+                    throw new \RuntimeException('Cache probe value could not be read back.');
+                }
+            } finally {
+                Cache::forget($key);
+            }
         }, 'Cache read/write successful via '.config('cache.default').'.');
 
         $privateDisk = (string) config('smart_registration.private_disk', env('NURSELINK_PRIVATE_DISK', 'private'));
