@@ -47,6 +47,16 @@ use App\Http\Controllers\Api\Admin\Events\EventAttendanceController;
 
 
 Route::get('/health', fn () => ['status' => 'ok', 'service' => 'NurseLink API', 'build' => 'NL-011.2-cpanel']);
+Route::get('/registration-status', function () {
+    $mode = (string) config('registration.mode', 'open');
+
+    return response()->json([
+        'data' => [
+            'mode' => in_array($mode, ['open', 'pilot', 'closed'], true) ? $mode : 'closed',
+            'accepting_registrations' => $mode !== 'closed',
+        ],
+    ]);
+})->middleware('throttle:60,1');
 
 Route::middleware(['auth:sanctum', 'verified', 'active.user'])->group(function () {
     Route::get('/me', MeController::class);

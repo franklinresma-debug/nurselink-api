@@ -11,6 +11,19 @@ class AuthRegistrationTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_public_registration_status_never_exposes_the_pilot_allowlist(): void
+    {
+        config()->set('registration.mode', 'pilot');
+        config()->set('registration.pilot_emails', ['private-pilot@example.com']);
+
+        $response = $this->getJson('/api/registration-status')
+            ->assertSuccessful()
+            ->assertJsonPath('data.mode', 'pilot')
+            ->assertJsonPath('data.accepting_registrations', true);
+
+        $this->assertStringNotContainsString('private-pilot@example.com', $response->getContent());
+    }
+
     public function test_registration_normalizes_email_and_assigns_applicant_role(): void
     {
         $this->seed(RolePermissionSeeder::class);
