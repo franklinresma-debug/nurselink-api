@@ -19,12 +19,32 @@ class CreateNewUser implements CreatesNewUsers
     {
         $email = mb_strtolower(trim((string) ($input['email'] ?? '')));
 
+        $registrationMode = (string) config('registration.mode', 'open');
+        $pilotEmails = (array) config('registration.pilot_emails', []);
+
         Validator::make([
             ...$input,
             'email' => $email,
         ], [
             'name' => ['required', 'string', 'max:160'],
-            'email' => ['required', 'string', 'email', 'max:255', Rule::unique(User::class)],
+            'email' => [
+                'required',
+                'string',
+                'email',
+                'max:255',
+                static function (string $attribute, mixed $value, \Closure $fail) use ($registrationMode, $pilotEmails): void {
+                    $normalized = mb_strtolower(trim((string) $value));
+
+                    if ($registrationMode === 'closed') {
+                        $fail('New member registration is temporarily closed.');
+                    }
+
+                    if ($registrationMode === 'pilot' && ! in_array($normalized, $pilotEmails, true)) {
+                        $fail('New member registration is currently limited to invited pilot participants.');
+                    }
+                },
+                Rule::unique(User::class),
+            ],
             'password' => ['required', 'string', new Password],
         ])->validate();
 
