@@ -78,4 +78,25 @@ class AuthRegistrationTest extends TestCase
 
         $this->assertDatabaseMissing('users', ['email' => 'closed@example.com']);
     }
+
+    public function test_public_registration_is_rate_limited_by_email(): void
+    {
+        for ($attempt = 1; $attempt <= 3; $attempt++) {
+            $this->postJson('/register', [
+                'name' => 'Rate Limit Test',
+                'email' => 'rate-limited@example.com',
+                'password' => 'short',
+                'password_confirmation' => 'short',
+            ])->assertUnprocessable();
+        }
+
+        $this->postJson('/register', [
+            'name' => 'Rate Limit Test',
+            'email' => 'rate-limited@example.com',
+            'password' => 'short',
+            'password_confirmation' => 'short',
+        ])->assertStatus(429)
+            ->assertHeader('Retry-After')
+            ->assertJsonPath('message', 'Too many registration attempts. Please wait before trying again.');
+    }
 }
