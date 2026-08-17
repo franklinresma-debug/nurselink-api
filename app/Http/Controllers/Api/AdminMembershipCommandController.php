@@ -986,6 +986,9 @@ class AdminMembershipCommandController extends Controller
         string $userId,
         string $memberNumber
     ): void {
+        app(\App\Services\CoreMembershipActivationService::class)
+            ->sync($userId, $memberNumber);
+
         $updates = [];
 
         if (Schema::hasColumn('users', 'member_number')) {

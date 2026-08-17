@@ -12,6 +12,7 @@ use App\Models\Role;
 use App\Models\User;
 use App\Services\Credentials\MemberDocumentImportService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
 class ApplicationLifecycleService
@@ -45,6 +46,10 @@ class ApplicationLifecycleService
         $application->lock_version++;
         $application->save();
 
+        if (in_array($to, ['submitted', 'resubmitted'], true)) {
+            $this->syncMembershipReviewQueue($application, $to === 'resubmitted');
+        }
+
         ApplicationStatusEvent::query()->create([
             'application_id' => $application->id,
             'actor_user_id' => $actor->id,
@@ -62,6 +67,52 @@ class ApplicationLifecycleService
         ], request());
 
         return $application->refresh();
+    }
+
+    private function syncMembershipReviewQueue(Application $application, bool $isResubmission): void
+    {
+        if (! Schema::hasTable('nurselink_memberships')) {
+            return;
+        }
+
+        $existing = DB::table('nurselink_memberships')
+            ->where('user_id', $application->user_id)
+            ->first();
+
+        // Never reopen a membership after an Administrator has made a final decision.
+        if ($existing && in_array((string) $existing->status, ['approved', 'declined'], true)) {
+            return;
+        }
+
+        $now = now();
+        $values = [
+            'status' => 'submitted',
+            'updated_at' => $now,
+        ];
+
+        if (Schema::hasColumn('nurselink_memberships', 'submitted_at')) {
+            $values['submitted_at'] = $existing?->submitted_at ?: ($application->submitted_at ?: $now);
+        }
+        if ($isResubmission && Schema::hasColumn('nurselink_memberships', 'resubmitted_at')) {
+            $values['resubmitted_at'] = $application->resubmitted_at ?: $now;
+        }
+        if (Schema::hasColumn('nurselink_memberships', 'last_status_changed_at')) {
+            $values['last_status_changed_at'] = $now;
+        }
+        if (Schema::hasColumn('nurselink_memberships', 'last_status_changed_by')) {
+            $values['last_status_changed_by'] = (string) $application->user_id;
+        }
+
+        if ($existing) {
+            DB::table('nurselink_memberships')->where('id', $existing->id)->update($values);
+            return;
+        }
+
+        DB::table('nurselink_memberships')->insert([
+            'user_id' => $application->user_id,
+            'created_at' => $now,
+            ...$values,
+        ]);
     }
 
     public function approve(Application $application, User $actor): Member

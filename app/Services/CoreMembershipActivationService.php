@@ -4,40 +4,68 @@ namespace App\Services;
 
 use App\Models\Member;
 use App\Models\MemberProfile;
+use App\Models\Application;
 use App\Models\Role;
 use App\Models\User;
+use App\Services\Credentials\MemberDocumentImportService;
 use Illuminate\Support\Facades\DB;
 
 class CoreMembershipActivationService
 {
+    public function __construct(
+        private readonly MemberDocumentImportService $documentImport
+    ) {}
+
     public function sync(string $userId, string $memberNumber): Member
     {
+        $application = Application::query()
+            ->where('user_id', $userId)
+            ->orderByDesc('submitted_at')
+            ->orderByDesc('created_at')
+            ->first();
+
         $member = Member::query()->updateOrCreate(
             ['user_id' => $userId],
-            ['member_no' => $memberNumber, 'status' => 'active', 'joined_at' => now()]
+            [
+                'member_no' => $memberNumber,
+                'status' => 'active',
+                'joined_at' => now(),
+                'approved_from_application_id' => $application?->id,
+            ]
         );
 
         $profile = DB::table('nurselink_smart_registration_profiles')
             ->where('user_id', $userId)
             ->first();
 
-        if ($profile) {
+        $applicationProfile = is_array($application?->profile_data)
+            ? $application->profile_data
+            : [];
+
+        if ($profile || $applicationProfile !== []) {
             MemberProfile::query()->updateOrCreate(['member_id' => $member->id], [
-                'first_name' => $profile->first_name,
-                'middle_name' => $profile->middle_name,
-                'last_name' => $profile->last_name,
-                'date_of_birth' => $profile->birth_date,
-                'nationality' => $profile->nationality,
-                'mobile_phone' => $profile->phone,
-                'city' => $profile->city,
-                'region' => $profile->province,
-                'country' => $profile->country,
-                'professional_title' => $profile->professional_title,
-                'current_position' => $profile->current_position,
-                'current_employer' => $profile->current_employer,
-                'years_experience' => $profile->years_experience,
-                'profile_meta' => ['source' => 'smart_registration'],
+                'first_name' => $applicationProfile['first_name'] ?? $profile?->first_name,
+                'middle_name' => $applicationProfile['middle_name'] ?? $profile?->middle_name,
+                'last_name' => $applicationProfile['last_name'] ?? $profile?->last_name,
+                'date_of_birth' => $applicationProfile['date_of_birth'] ?? $profile?->birth_date,
+                'nationality' => $applicationProfile['nationality'] ?? $profile?->nationality,
+                'mobile_phone' => $applicationProfile['mobile_phone'] ?? $profile?->phone,
+                'city' => $applicationProfile['city'] ?? $profile?->city,
+                'region' => $applicationProfile['region'] ?? $profile?->province,
+                'country' => $applicationProfile['country'] ?? $profile?->country,
+                'professional_title' => $applicationProfile['professional_title'] ?? $profile?->professional_title,
+                'current_position' => $applicationProfile['current_position'] ?? $profile?->current_position,
+                'current_employer' => $applicationProfile['current_employer'] ?? $profile?->current_employer,
+                'years_experience' => $applicationProfile['years_experience'] ?? $profile?->years_experience,
+                'profile_meta' => [
+                    'source' => 'smart_registration',
+                    'application_id' => $application?->id,
+                ],
             ]);
+        }
+
+        if ($application) {
+            $this->documentImport->fromApprovedApplication($member, $application);
         }
 
         $user = User::query()->findOrFail($userId);

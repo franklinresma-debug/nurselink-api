@@ -7,7 +7,9 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class ReviewCenterController extends Controller
 {
@@ -18,7 +20,7 @@ class ReviewCenterController extends Controller
         return response()->json([
             'data' => [
                 'role' => $access['role'],
-                'credentials_pending' => DB::table('nurselink_credentials_registry')
+                'credentials_pending' => DB::table('professional_credentials')
                     ->whereIn('verification_status', ['unverified', 'pending'])
                     ->count(),
                 'job_applications_active' => DB::table('nurselink_job_applications')
@@ -38,82 +40,99 @@ class ReviewCenterController extends Controller
     {
         $this->authorizeReviewer($request);
 
-        $query = DB::table('nurselink_credentials_registry')
+        $query = DB::table('professional_credentials as credentials')
+            ->join('members', 'members.id', '=', 'credentials.member_id')
+            ->join('users', 'users.id', '=', 'members.user_id')
+            ->leftJoin('member_documents as primary_document', 'primary_document.id', '=', 'credentials.primary_document_id')
             ->orderByRaw("CASE verification_status
                 WHEN 'pending' THEN 1
                 WHEN 'unverified' THEN 2
-                WHEN 'verified' THEN 3
-                WHEN 'expired' THEN 4
-                ELSE 5 END")
-            ->orderByDesc('updated_at')
+                WHEN 'discrepancy' THEN 3
+                WHEN 'unable_to_verify' THEN 4
+                WHEN 'document_supported' THEN 5
+                WHEN 'verified' THEN 6
+                ELSE 7 END")
+            ->orderByDesc('credentials.updated_at')
             ->limit(300);
 
         if ($request->filled('status')) {
             $status = $request->string('status')->toString();
 
-            if (in_array($status, ['unverified', 'pending', 'verified', 'expired'], true)) {
-                $query->where('verification_status', $status);
+            if (in_array($status, ['unverified', 'pending', 'verified', 'document_supported', 'unable_to_verify', 'discrepancy'], true)) {
+                $query->where('credentials.verification_status', $status);
             }
         }
 
-        $rows = $query->get();
-        $members = $this->memberMap($rows->pluck('user_id')->all());
+        $rows = $query->get([
+            'credentials.*',
+            'members.user_id',
+            'users.name as member_name',
+            'users.email as member_email',
+            'primary_document.title as evidence_title',
+            'primary_document.original_name as evidence_original_name',
+            'primary_document.security_status as evidence_security_status',
+        ]);
 
         return response()->json([
-            'data' => $rows->map(function ($row) use ($members): array {
+            'data' => $rows->map(function ($row): array {
                 return [
-                    'id' => (int) $row->id,
+                    'id' => (string) $row->id,
                     'user_id' => (string) $row->user_id,
-                    'member' => $members[(string) $row->user_id] ?? (string) $row->user_id,
+                    'member' => $row->member_name ?: $row->member_email,
                     'credential_type' => $row->credential_type,
                     'title' => $row->title,
-                    'issuing_body' => $row->issuing_body,
-                    'credential_number' => $row->credential_number,
+                    'issuing_body' => $row->issuing_authority,
+                    'credential_number' => $row->credential_number_last4 ? '••••'.$row->credential_number_last4 : null,
                     'country' => $row->country,
-                    'issue_date' => $row->issue_date,
-                    'expiry_date' => $row->expiry_date,
+                    'issue_date' => $row->issued_on,
+                    'expiry_date' => $row->expires_on,
                     'verification_status' => $row->verification_status,
-                    'notes' => $row->notes,
-                    'review_notes' => $row->review_notes ?? null,
-                    'reviewed_by' => $row->reviewed_by ?? null,
-                    'reviewed_at' => $row->reviewed_at ?? null,
+                    'review_notes' => $row->verification_note,
+                    'reviewed_by' => $row->verified_by,
+                    'reviewed_at' => $row->verified_at,
+                    'primary_document_id' => $row->primary_document_id,
+                    'evidence_title' => $row->evidence_title,
+                    'evidence_security_status' => $row->evidence_security_status,
+                    'evidence_download_url' => $row->primary_document_id
+                        ? '/api/reviewer/credentials/'.$row->id.'/evidence/'.$row->primary_document_id
+                        : null,
                     'updated_at' => $row->updated_at,
                 ];
             })->values(),
         ]);
     }
 
-    public function reviewCredential(Request $request, int $id): JsonResponse
+    public function reviewCredential(Request $request, string $id): JsonResponse
     {
         $access = $this->authorizeReviewer($request);
 
         $data = $request->validate([
             'verification_status' => ['required', 'string', Rule::in([
-                'unverified',
-                'pending',
-                'verified',
-                'expired',
+                'unverified', 'pending', 'verified', 'document_supported',
+                'unable_to_verify', 'discrepancy',
             ])],
             'review_notes' => ['nullable', 'string', 'max:4000'],
         ]);
 
-        $before = DB::table('nurselink_credentials_registry')
+        $before = DB::table('professional_credentials')
             ->where('id', $id)
             ->first();
 
         abort_unless($before, 404);
 
-        DB::table('nurselink_credentials_registry')
+        $accepted = in_array($data['verification_status'], ['verified', 'document_supported'], true);
+
+        DB::table('professional_credentials')
             ->where('id', $id)
             ->update([
                 'verification_status' => $data['verification_status'],
-                'review_notes' => $data['review_notes'] ?? null,
-                'reviewed_by' => (string) $request->user()->getKey(),
-                'reviewed_at' => now(),
+                'verification_note' => $data['review_notes'] ?? null,
+                'verified_by' => $accepted ? (string) $request->user()->getKey() : null,
+                'verified_at' => $accepted ? now() : null,
                 'updated_at' => now(),
             ]);
 
-        $after = DB::table('nurselink_credentials_registry')
+        $after = DB::table('professional_credentials')
             ->where('id', $id)
             ->first();
 
@@ -126,8 +145,11 @@ class ReviewCenterController extends Controller
             $after
         );
 
+        $member = DB::table('members')->where('id', $after->member_id)->first();
+        abort_unless($member, 404);
+
         $membership = DB::table('nurselink_memberships')
-            ->where('user_id', $after->user_id)
+            ->where('user_id', $member->user_id)
             ->first();
 
         $credentialActionUrl = $membership && $membership->status === 'approved'
@@ -135,7 +157,7 @@ class ReviewCenterController extends Controller
             : '/smart-registration?nlstep=3';
 
         $this->notifyUser(
-            (string) $after->user_id,
+            (string) $member->user_id,
             'credential.' . $after->verification_status,
             $after->verification_status === 'verified' ? 'success' : (
                 $after->verification_status === 'expired' ? 'warning' : 'info'
@@ -148,13 +170,48 @@ class ReviewCenterController extends Controller
         return response()->json([
             'message' => 'Credential review saved.',
             'data' => [
-                'id' => (int) $after->id,
+                'id' => (string) $after->id,
                 'verification_status' => $after->verification_status,
-                'review_notes' => $after->review_notes,
-                'reviewed_at' => $after->reviewed_at,
+                'review_notes' => $after->verification_note,
+                'reviewed_at' => $after->verified_at,
                 'reviewer_role' => $access['role'],
             ],
         ]);
+    }
+
+    public function downloadCredentialEvidence(Request $request, string $id, string $documentId): StreamedResponse
+    {
+        $this->authorizeReviewer($request);
+
+        $credential = DB::table('professional_credentials')->where('id', $id)->first();
+        abort_unless($credential, 404);
+
+        $isLinked = $credential->primary_document_id === $documentId
+            || DB::table('credential_documents')
+                ->where('credential_id', $id)
+                ->where('document_id', $documentId)
+                ->exists();
+        abort_unless($isLinked, 404);
+
+        $document = DB::table('member_documents')
+            ->where('id', $documentId)
+            ->where('member_id', $credential->member_id)
+            ->first();
+        abort_unless($document, 404);
+        abort_unless($document->security_status === 'clean', 423, 'Document security scan must complete before download.');
+        abort_unless(Storage::disk($document->storage_disk)->exists($document->storage_path), 404);
+
+        $this->audit(
+            $request,
+            'credential.evidence_viewed',
+            'professional_credential',
+            $id,
+            null,
+            ['document_id' => $documentId]
+        );
+
+        return Storage::disk($document->storage_disk)
+            ->download($document->storage_path, $document->original_name);
     }
 
     public function jobApplications(Request $request): JsonResponse

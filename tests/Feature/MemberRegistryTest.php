@@ -57,4 +57,26 @@ class MemberRegistryTest extends TestCase
         $app=Application::query()->create(['application_no'=>'NLA-2026-000002','user_id'=>$applicant->id,'status'=>'returned_for_information','progress_percent'=>80,'profile_data'=>[]]);
         $this->actingAs($applicant)->postJson("/api/applications/{$app->id}/resubmit")->assertOk()->assertJsonPath('data.status','resubmitted');
     }
+
+    public function test_submitted_application_is_synchronized_to_admin_membership_queue(): void
+    {
+        $applicant=$this->userWithRole('applicant');
+        $application=Application::query()->create([
+            'application_no'=>'NLA-2026-000003',
+            'user_id'=>$applicant->id,
+            'status'=>'ready_to_submit',
+            'progress_percent'=>100,
+            'profile_data'=>[],
+        ]);
+
+        $this->actingAs($applicant)
+            ->postJson("/api/applications/{$application->id}/submit")
+            ->assertOk()
+            ->assertJsonPath('data.status','submitted');
+
+        $this->assertDatabaseHas('nurselink_memberships', [
+            'user_id'=>$applicant->id,
+            'status'=>'submitted',
+        ]);
+    }
 }

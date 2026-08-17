@@ -67,6 +67,7 @@ Route::middleware(['auth:sanctum', 'verified', 'active.user'])->group(function (
     });
 
     Route::get('/members/me', MyMemberController::class)->middleware('permission:profile.manage.own');
+    Route::patch('/members/me/profile', [MyMemberController::class, 'updateProfile'])->middleware('permission:profile.manage.own');
 
     Route::middleware('permission:message.view.own')->group(function () {
         Route::get('/messages', [InboxController::class, 'index']);
@@ -362,7 +363,8 @@ Route::middleware(['auth:sanctum', 'verified', 'active.user', \App\Http\Middlewa
     Route::get('/summary', [\App\Http\Controllers\Api\ReviewCenterController::class, 'summary']);
 
     Route::get('/credentials', [\App\Http\Controllers\Api\ReviewCenterController::class, 'credentials']);
-    Route::patch('/credentials/{id}', [\App\Http\Controllers\Api\ReviewCenterController::class, 'reviewCredential'])->whereNumber('id');
+    Route::patch('/credentials/{id}', [\App\Http\Controllers\Api\ReviewCenterController::class, 'reviewCredential'])->whereUuid('id');
+    Route::get('/credentials/{id}/evidence/{documentId}', [\App\Http\Controllers\Api\ReviewCenterController::class, 'downloadCredentialEvidence'])->whereUuid('id')->whereUuid('documentId');
 
     Route::get('/job-applications', [\App\Http\Controllers\Api\ReviewCenterController::class, 'jobApplications']);
     Route::patch('/job-applications/{id}', [\App\Http\Controllers\Api\ReviewCenterController::class, 'reviewJobApplication'])->whereNumber('id');
