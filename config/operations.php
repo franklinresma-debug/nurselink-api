@@ -9,6 +9,14 @@ return [
         'manifest_disk' => env('NURSELINK_BACKUP_MANIFEST_DISK', 'private'),
         'root' => env('NURSELINK_BACKUP_ROOT'),
     ],
+    'monitoring' => [
+        'web_url' => env('NURSELINK_MONITOR_WEB_URL', 'https://app.amsertech.com/'),
+        'readiness_url' => env('NURSELINK_MONITOR_READY_URL', 'https://api.amsertech.com/api/health/ready'),
+        'alert_email' => env('NURSELINK_MONITOR_ALERT_EMAIL', 'franklin.resma@gmail.com'),
+        'maximum_backup_age_hours' => (int) env('NURSELINK_MONITOR_BACKUP_MAX_HOURS', 26),
+        'minimum_disk_free_percent' => (float) env('NURSELINK_MONITOR_DISK_FREE_PERCENT', 15),
+        'queue_lag_minutes' => (int) env('NURSELINK_MONITOR_QUEUE_LAG_MINUTES', 15),
+    ],
     'security_headers_policy_path' => env('NURSELINK_SECURITY_HEADERS_POLICY_PATH'),
     'security_headers_policy_marker' => env(
         'NURSELINK_SECURITY_HEADERS_POLICY_MARKER',

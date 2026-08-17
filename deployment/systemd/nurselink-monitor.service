@@ -1,0 +1,17 @@
+[Unit]
+Description=NurseLink production health and backup monitor
+After=network-online.target mysql.service nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/var/www/nurselink-api
+ExecStart=/usr/bin/php artisan nurselink:monitor-production --no-interaction
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=full
+ReadWritePaths=/var/www/nurselink-api/storage /var/www/nurselink-api/bootstrap/cache

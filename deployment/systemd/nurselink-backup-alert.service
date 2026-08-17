@@ -1,0 +1,16 @@
+[Unit]
+Description=Notify NurseLink operations when the backup service fails
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/var/www/nurselink-api
+ExecStart=/usr/bin/php artisan nurselink:monitor-production --incident=backup-service-failed --no-interaction
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=full
+ReadWritePaths=/var/www/nurselink-api/storage /var/www/nurselink-api/bootstrap/cache

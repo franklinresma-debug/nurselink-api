@@ -1,0 +1,11 @@
+[Unit]
+Description=Run NurseLink production monitoring every five minutes
+
+[Timer]
+OnCalendar=*-*-* *:0/5:00
+AccuracySec=20s
+Persistent=true
+Unit=nurselink-monitor.service
+
+[Install]
+WantedBy=timers.target
