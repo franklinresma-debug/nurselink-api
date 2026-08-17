@@ -115,6 +115,37 @@ class AdministrationOperationsCenterController extends Controller
                     ->count()
                 : 0;
 
+        $termsVersion = (string) config('registration.terms_version');
+        $privacyVersion = (string) config('registration.privacy_version');
+        $activeUsers = DB::table('users')->where('status', 'active');
+        $policyConsentCurrent = (clone $activeUsers)
+            ->whereNotNull('terms_accepted_at')
+            ->whereNotNull('privacy_accepted_at')
+            ->where('terms_version', $termsVersion)
+            ->where('privacy_version', $privacyVersion)
+            ->count();
+        $policyConsentPendingQuery = (clone $activeUsers)->where(function ($query) use ($termsVersion, $privacyVersion): void {
+            $query->whereNull('terms_accepted_at')
+                ->orWhereNull('privacy_accepted_at')
+                ->orWhereNull('terms_version')
+                ->orWhereNull('privacy_version')
+                ->orWhere('terms_version', '!=', $termsVersion)
+                ->orWhere('privacy_version', '!=', $privacyVersion);
+        });
+        $policyConsentPending = (clone $policyConsentPendingQuery)->count();
+        $policyConsentPendingAccounts = (clone $policyConsentPendingQuery)
+            ->orderBy('created_at')
+            ->limit(50)
+            ->get(['id', 'name', 'email', 'terms_version', 'privacy_version', 'created_at'])
+            ->map(fn ($user): array => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'terms_version' => $user->terms_version,
+                'privacy_version' => $user->privacy_version,
+                'created_at' => $user->created_at,
+            ])->values();
+
         return response()->json([
             'data' => [
                 'release' =>
@@ -138,6 +169,18 @@ class AdministrationOperationsCenterController extends Controller
                         $supportOpen,
                     'unread_member_notifications' =>
                         $unreadNotifications,
+                    'policy_consent_current' =>
+                        $policyConsentCurrent,
+                    'policy_consent_pending' =>
+                        $policyConsentPending,
+                ],
+                'policy_consent' => [
+                    'terms_version' => $termsVersion,
+                    'privacy_version' => $privacyVersion,
+                    'active_accounts' => (clone $activeUsers)->count(),
+                    'current' => $policyConsentCurrent,
+                    'pending' => $policyConsentPending,
+                    'pending_accounts' => $policyConsentPendingAccounts,
                 ],
                 'capabilities' => [
                     'role' =>
