@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\Application\MyApplicationController;
 use App\Http\Controllers\Api\Application\SmartRegistrationController;
 use App\Http\Controllers\Api\Admin\Application\SmartRegistrationReviewController;
 use App\Http\Controllers\Api\MeController;
+use App\Http\Controllers\Api\PolicyConsentController;
 use App\Http\Controllers\Api\Member\MyMemberController;
 use Illuminate\Support\Facades\Route;
 
@@ -60,6 +61,8 @@ Route::get('/registration-status', function () {
 
 Route::middleware(['auth:sanctum', 'verified', 'active.user'])->group(function () {
     Route::get('/me', MeController::class);
+    Route::get('/policy-consent', [PolicyConsentController::class, 'show']);
+    Route::post('/policy-consent', [PolicyConsentController::class, 'accept'])->middleware('throttle:6,1');
 
     Route::middleware('permission:application.manage.own')->group(function () {
         Route::get('/applications/me', [MyApplicationController::class, 'show']);
