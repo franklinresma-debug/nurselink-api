@@ -520,6 +520,9 @@ Route::middleware(['auth:sanctum', 'verified', 'active.user'])->group(function (
     Route::get('/nurselink/admin/session', [\App\Http\Controllers\Api\AdminPortalController::class, 'session'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
     Route::get('/nurselink/admin/dashboard', [\App\Http\Controllers\Api\AdminPortalController::class, 'dashboard'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
     Route::get('/nurselink/admin/users', [\App\Http\Controllers\Api\AdminPortalController::class, 'users'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
+    Route::get('/nurselink/admin/service-scans', [\App\Http\Controllers\Api\AdminServiceScanController::class, 'index'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
+    Route::post('/nurselink/admin/service-scans/resolve', [\App\Http\Controllers\Api\AdminServiceScanController::class, 'resolve'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
+    Route::post('/nurselink/admin/service-scans', [\App\Http\Controllers\Api\AdminServiceScanController::class, 'record'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
     Route::post('/nurselink/admin/users/grant', [\App\Http\Controllers\Api\AdminPortalController::class, 'grant'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
     Route::delete('/nurselink/admin/users/{userId}', [\App\Http\Controllers\Api\AdminPortalController::class, 'revoke'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
 });
