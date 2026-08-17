@@ -48,13 +48,33 @@ class MonitorProduction extends Command
 
     private function httpCheck(string $url, bool $expectReady = false): array
     {
-        try {
-            $response = Http::acceptJson()->timeout(10)->get($url);
-            $ready = $response->successful() && (! $expectReady || $response->json('status') === 'ok');
-            return ['status' => $ready ? 'ok' : 'fail', 'detail' => sprintf('%s returned HTTP %d%s.', $url, $response->status(), $expectReady ? ' with status '.($response->json('status') ?? 'missing') : '')];
-        } catch (Throwable $e) {
-            return ['status' => 'fail', 'detail' => $url.' failed: '.mb_substr($e->getMessage(), 0, 220)];
+        $attempts = max(1, (int) config('operations.monitoring.http_attempts', 3));
+        $delayMilliseconds = max(0, (int) config('operations.monitoring.http_retry_delay_ms', 750));
+        $timeoutSeconds = max(1, (int) config('operations.monitoring.http_timeout_seconds', 10));
+        $lastFailure = 'unknown failure';
+
+        for ($attempt = 1; $attempt <= $attempts; $attempt++) {
+            try {
+                $response = Http::acceptJson()->timeout($timeoutSeconds)->get($url);
+                $ready = $response->successful() && (! $expectReady || $response->json('status') === 'ok');
+
+                if ($ready) {
+                    $retryDetail = $attempt > 1 ? ' after '.$attempt.' attempts' : '';
+
+                    return ['status' => 'ok', 'detail' => sprintf('%s returned HTTP %d%s%s.', $url, $response->status(), $expectReady ? ' with status '.($response->json('status') ?? 'missing') : '', $retryDetail)];
+                }
+
+                $lastFailure = sprintf('returned HTTP %d%s', $response->status(), $expectReady ? ' with status '.($response->json('status') ?? 'missing') : '');
+            } catch (Throwable $e) {
+                $lastFailure = 'failed: '.mb_substr($e->getMessage(), 0, 220);
+            }
+
+            if ($attempt < $attempts && $delayMilliseconds > 0) {
+                usleep($delayMilliseconds * 1000);
+            }
         }
+
+        return ['status' => 'fail', 'detail' => sprintf('%s %s after %d attempt(s).', $url, $lastFailure, $attempts)];
     }
 
     private function failedJobsCheck(): array

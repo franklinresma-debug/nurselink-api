@@ -16,6 +16,9 @@ return [
         'maximum_backup_age_hours' => (int) env('NURSELINK_MONITOR_BACKUP_MAX_HOURS', 26),
         'minimum_disk_free_percent' => (float) env('NURSELINK_MONITOR_DISK_FREE_PERCENT', 15),
         'queue_lag_minutes' => (int) env('NURSELINK_MONITOR_QUEUE_LAG_MINUTES', 15),
+        'http_attempts' => max(1, (int) env('NURSELINK_MONITOR_HTTP_ATTEMPTS', 3)),
+        'http_retry_delay_ms' => max(0, (int) env('NURSELINK_MONITOR_HTTP_RETRY_DELAY_MS', 750)),
+        'http_timeout_seconds' => max(1, (int) env('NURSELINK_MONITOR_HTTP_TIMEOUT_SECONDS', 10)),
     ],
     'security_headers_policy_path' => env('NURSELINK_SECURITY_HEADERS_POLICY_PATH'),
     'security_headers_policy_marker' => env(
