@@ -46,6 +46,8 @@ class CreateNewUser implements CreatesNewUsers
                 Rule::unique(User::class),
             ],
             'password' => ['required', 'string', new Password],
+            'terms_accepted' => ['required', 'accepted'],
+            'privacy_accepted' => ['required', 'accepted'],
         ])->validate();
 
         $user = User::query()->create([
@@ -54,6 +56,10 @@ class CreateNewUser implements CreatesNewUsers
             'password' => Hash::make($input['password']),
             'status' => 'active',
             'mfa_required' => false,
+            'terms_accepted_at' => now(),
+            'terms_version' => config('registration.terms_version'),
+            'privacy_accepted_at' => now(),
+            'privacy_version' => config('registration.privacy_version'),
         ]);
 
         $applicant = Role::query()->where('code', 'applicant')->firstOrFail();
@@ -61,7 +67,11 @@ class CreateNewUser implements CreatesNewUsers
             $applicant->id => ['assigned_at' => now()],
         ]);
 
-        $this->audit->write('auth.registered', $user, 'user', $user->id, ['role' => 'applicant'], request());
+        $this->audit->write('auth.registered', $user, 'user', $user->id, [
+            'role' => 'applicant',
+            'terms_version' => $user->terms_version,
+            'privacy_version' => $user->privacy_version,
+        ], request());
 
         return $user;
     }

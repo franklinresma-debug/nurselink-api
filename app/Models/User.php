@@ -17,13 +17,13 @@ class User extends Authenticatable implements MustVerifyEmail
 {
     use HasApiTokens, HasFactory, HasUuids, Notifiable, TwoFactorAuthenticatable;
 
-    protected $fillable = ['name', 'email', 'password', 'status', 'mfa_required', 'email_verified_at'];
+    protected $fillable = ['name', 'email', 'password', 'status', 'mfa_required', 'email_verified_at', 'terms_accepted_at', 'terms_version', 'privacy_accepted_at', 'privacy_version'];
 
     protected $hidden = ['password', 'remember_token', 'two_factor_secret', 'two_factor_recovery_codes'];
 
     protected function casts(): array
     {
-        return ['email_verified_at' => 'datetime', 'password' => 'hashed', 'mfa_required' => 'boolean', 'two_factor_confirmed_at' => 'datetime'];
+        return ['email_verified_at' => 'datetime', 'password' => 'hashed', 'mfa_required' => 'boolean', 'two_factor_confirmed_at' => 'datetime', 'terms_accepted_at' => 'datetime', 'privacy_accepted_at' => 'datetime'];
     }
 
     public function roles(): BelongsToMany

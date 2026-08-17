@@ -27,17 +27,38 @@ class AuthRegistrationTest extends TestCase
     public function test_registration_normalizes_email_and_assigns_applicant_role(): void
     {
         $this->seed(RolePermissionSeeder::class);
+        config()->set('registration.terms_version', 'terms-test-v1');
+        config()->set('registration.privacy_version', 'privacy-test-v1');
 
         $response = $this->postJson('/register', [
             'name' => 'Maria Santos',
             'email' => '  MARIA@EXAMPLE.COM ',
             'password' => 'Very-Strong-Password-2026!',
             'password_confirmation' => 'Very-Strong-Password-2026!',
+            'terms_accepted' => true,
+            'privacy_accepted' => true,
         ]);
 
         $response->assertSuccessful();
-        $this->assertDatabaseHas('users', ['email' => 'maria@example.com']);
+        $this->assertDatabaseHas('users', [
+            'email' => 'maria@example.com',
+            'terms_version' => 'terms-test-v1',
+            'privacy_version' => 'privacy-test-v1',
+        ]);
         $this->assertTrue(Role::where('code', 'applicant')->firstOrFail()->users()->where('email', 'maria@example.com')->exists());
+    }
+
+    public function test_registration_requires_terms_and_privacy_consent(): void
+    {
+        $this->postJson('/register', [
+            'name' => 'Consent Missing',
+            'email' => 'consent-missing@example.com',
+            'password' => 'Very-Strong-Password-2026!',
+            'password_confirmation' => 'Very-Strong-Password-2026!',
+        ])->assertUnprocessable()
+            ->assertJsonValidationErrors(['terms_accepted', 'privacy_accepted']);
+
+        $this->assertDatabaseMissing('users', ['email' => 'consent-missing@example.com']);
     }
 
     public function test_pilot_registration_accepts_only_allowlisted_email_addresses(): void
@@ -51,6 +72,8 @@ class AuthRegistrationTest extends TestCase
             'email' => 'other@example.com',
             'password' => 'Very-Strong-Password-2026!',
             'password_confirmation' => 'Very-Strong-Password-2026!',
+            'terms_accepted' => true,
+            'privacy_accepted' => true,
         ])->assertUnprocessable()
             ->assertJsonValidationErrors('email');
 
@@ -59,6 +82,8 @@ class AuthRegistrationTest extends TestCase
             'email' => ' INVITED@EXAMPLE.COM ',
             'password' => 'Very-Strong-Password-2026!',
             'password_confirmation' => 'Very-Strong-Password-2026!',
+            'terms_accepted' => true,
+            'privacy_accepted' => true,
         ])->assertSuccessful();
 
         $this->assertDatabaseHas('users', ['email' => 'invited@example.com']);
@@ -73,6 +98,8 @@ class AuthRegistrationTest extends TestCase
             'email' => 'closed@example.com',
             'password' => 'Very-Strong-Password-2026!',
             'password_confirmation' => 'Very-Strong-Password-2026!',
+            'terms_accepted' => true,
+            'privacy_accepted' => true,
         ])->assertUnprocessable()
             ->assertJsonValidationErrors('email');
 
@@ -87,6 +114,8 @@ class AuthRegistrationTest extends TestCase
                 'email' => 'rate-limited@example.com',
                 'password' => 'short',
                 'password_confirmation' => 'short',
+                'terms_accepted' => true,
+                'privacy_accepted' => true,
             ])->assertUnprocessable();
         }
 
@@ -95,6 +124,8 @@ class AuthRegistrationTest extends TestCase
             'email' => 'rate-limited@example.com',
             'password' => 'short',
             'password_confirmation' => 'short',
+            'terms_accepted' => true,
+            'privacy_accepted' => true,
         ])->assertStatus(429)
             ->assertHeader('Retry-After')
             ->assertJsonPath('message', 'Too many registration attempts. Please wait before trying again.');
