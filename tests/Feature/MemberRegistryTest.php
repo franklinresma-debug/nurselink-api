@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Application;
 use App\Models\Role;
 use App\Models\User;
+use App\Services\CoreMembershipActivationService;
 use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -77,6 +78,31 @@ class MemberRegistryTest extends TestCase
         $this->assertDatabaseHas('nurselink_memberships', [
             'user_id'=>$applicant->id,
             'status'=>'submitted',
+        ]);
+    }
+
+    public function test_governed_membership_activation_synchronizes_application_approval(): void
+    {
+        $applicant = $this->userWithRole('applicant');
+        $application = Application::query()->create([
+            'application_no' => 'NLA-2026-000004',
+            'user_id' => $applicant->id,
+            'status' => 'submitted',
+            'progress_percent' => 100,
+            'profile_data' => [],
+        ]);
+
+        app(CoreMembershipActivationService::class)
+            ->sync((string) $applicant->id, 'NL-2026-000004');
+
+        $this->assertDatabaseHas('applications', [
+            'id' => $application->id,
+            'status' => 'approved',
+        ]);
+        $this->assertDatabaseHas('application_status_events', [
+            'application_id' => $application->id,
+            'from_status' => 'submitted',
+            'to_status' => 'approved',
         ]);
     }
 }

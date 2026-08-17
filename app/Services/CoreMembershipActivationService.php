@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Member;
 use App\Models\MemberProfile;
 use App\Models\Application;
+use App\Models\ApplicationStatusEvent;
 use App\Models\Role;
 use App\Models\User;
 use App\Services\Credentials\MemberDocumentImportService;
@@ -23,6 +24,8 @@ class CoreMembershipActivationService
             ->orderByDesc('submitted_at')
             ->orderByDesc('created_at')
             ->first();
+
+        $this->syncApprovedApplication($application);
 
         $member = Member::query()->updateOrCreate(
             ['user_id' => $userId],
@@ -75,5 +78,34 @@ class CoreMembershipActivationService
         if ($applicantRole) $user->roles()->detach($applicantRole->id);
 
         return $member->refresh();
+    }
+
+    private function syncApprovedApplication(?Application $application): void
+    {
+        if (! $application || in_array($application->status, ['approved', 'rejected'], true)) {
+            return;
+        }
+
+        $fromStatus = (string) $application->status;
+        $approvedAt = now();
+
+        $application->forceFill([
+            'status' => 'approved',
+            'review_started_at' => $application->review_started_at ?: $approvedAt,
+            'approved_at' => $application->approved_at ?: $approvedAt,
+            'lock_version' => (int) $application->lock_version + 1,
+        ])->save();
+
+        ApplicationStatusEvent::query()->create([
+            'application_id' => $application->id,
+            'actor_user_id' => request()->user()?->getKey(),
+            'from_status' => $fromStatus,
+            'to_status' => 'approved',
+            'note' => null,
+            'metadata' => [
+                'source' => 'governed_membership_approval',
+                'synchronized' => true,
+            ],
+        ]);
     }
 }
