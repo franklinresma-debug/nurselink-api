@@ -1,8 +1,8 @@
 NurseLink by KAPIT-BISIG
-Build: NL-011.2-cpanel
+Build: NL-013-ultahost-pilot
 Edition: Namecheap cPanel / Shared Hosting API Upload
 Target: /home/frankresma/nurselink-api
 Database: MySQL/MariaDB
 Sessions/Cache/Queue: database
 Private storage: local private filesystem
-Release label: 1.0.0-cpanel-pilot.1
+Release label: 1.0.0-ultahost-pilot.1

@@ -47,7 +47,7 @@ use App\Http\Controllers\Api\Admin\Events\EventAdminController;
 use App\Http\Controllers\Api\Admin\Events\EventAttendanceController;
 
 
-Route::get('/health', fn () => ['status' => 'ok', 'service' => 'NurseLink API', 'build' => 'NL-011.2-cpanel']);
+Route::get('/health', fn () => ['status' => 'ok', 'service' => 'NurseLink API', 'build' => config('operations.build')]);
 Route::get('/registration-status', function () {
     $mode = (string) config('registration.mode', 'open');
 
@@ -274,7 +274,7 @@ Route::middleware(['auth:sanctum', 'verified', 'active.user'])->group(function (
 });
 
 // NL-010 Analytics, Reporting, Privacy & Production Readiness
-Route::get('/health/live', fn () => response()->json(['status'=>'ok','service'=>'NurseLink API','build'=>'NL-011.2-cpanel','release'=>config('operations.release')]));
+Route::get('/health/live', fn () => response()->json(['status'=>'ok','service'=>'NurseLink API','build'=>config('operations.build'),'release'=>config('operations.release')]));
 Route::get('/health/ready', function (\App\Services\Operations\ReadinessCheckService $service) {
     $result = $service->check(false);
     return response()->json($result, $result['status'] === 'fail' ? 503 : 200);

@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/', fn () => response()->json([
     'product' => 'NurseLink by KAPIT-BISIG',
-    'build' => 'NL-011.2-cpanel',
+    'build' => config('operations.build'),
     'api' => '/api/health',
 ]));
 

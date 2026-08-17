@@ -11,7 +11,7 @@ class NL010AnalyticsProductionTest extends TestCase
     {
         $this->getJson('/api/health')
             ->assertOk()
-            ->assertJsonPath('build', 'NL-011.2-cpanel');
+            ->assertJsonPath('build', 'NL-013-ultahost-pilot');
     }
 
     public function test_readiness_endpoint_exists(): void

@@ -1,5 +1,6 @@
 <?php
 return [
+    'build' => env('NURSELINK_BUILD', 'NL-013-ultahost-pilot'),
     'release' => env('NURSELINK_RELEASE', '1.0.0'),
     'environment_label' => env('NURSELINK_ENVIRONMENT_LABEL', env('APP_ENV', 'production')),
     'ready_checks' => ['database','cache','queue','private_storage'],

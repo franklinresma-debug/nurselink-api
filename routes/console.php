@@ -157,7 +157,7 @@ Artisan::command('nurselink:integration-check {--deep}', function () {
         $this->line(sprintf('[%s] %s%s', strtoupper($c['status']), $c['check'], $c['detail'] ? ' — '.$c['detail'] : ''));
     }
     $this->newLine();
-    $this->line(json_encode(['build'=>'NL-011.2-cpanel','status'=>$failed ? 'fail' : 'pass','failed'=>$failed,'checks'=>$checks], JSON_PRETTY_PRINT));
+    $this->line(json_encode(['build'=>config('operations.build'),'status'=>$failed ? 'fail' : 'pass','failed'=>$failed,'checks'=>$checks], JSON_PRETTY_PRINT));
     return $failed ? 1 : 0;
 })->purpose('Run cross-module NurseLink staging integration checks');
 
