@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+READINESS_ENV="${NURSELINK_READINESS_ENV:-/etc/nurselink/pilot-readiness.env}"
+if [[ -r "${READINESS_ENV}" ]]; then
+  # Root-managed launch approvals; never stored in the application repository.
+  # shellcheck source=/dev/null
+  source "${READINESS_ENV}"
+fi
+
 API_ROOT="${NURSELINK_API_ROOT:-/var/www/nurselink-api}"
 BACKUP_ROOT="${NURSELINK_BACKUP_ROOT:-/root/nurselink-automated-backups}"
 MONITOR_UNIT="${NURSELINK_MONITOR_UNIT:-nurselink-monitor.service}"
