@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+API_ROOT="${NURSELINK_API_ROOT:-/var/www/nurselink-api}"
+BACKUP_ROOT="${NURSELINK_BACKUP_ROOT:-/root/nurselink-automated-backups}"
+MONITOR_UNIT="${NURSELINK_MONITOR_UNIT:-nurselink-monitor.service}"
+MONITOR_TIMER="${NURSELINK_MONITOR_TIMER:-nurselink-monitor.timer}"
+REQUIRED_SECONDS="${NURSELINK_PILOT_OBSERVATION_SECONDS:-86400}"
+
+POLICY_APPROVED="${NURSELINK_POLICY_APPROVED:-0}"
+SUPPORT_OWNER_CONFIRMED="${NURSELINK_SUPPORT_OWNER_CONFIRMED:-0}"
+PUBLIC_OPEN_AUTHORIZED="${NURSELINK_PUBLIC_OPEN_AUTHORIZED:-0}"
+
+failures=0
+blockers=0
+
+pass() { printf '[PASS] %s\n' "$1"; }
+fail() { printf '[FAIL] %s\n' "$1"; failures=$((failures + 1)); }
+blocked() { printf '[BLOCKED] %s\n' "$1"; blockers=$((blockers + 1)); }
+
+printf 'NurseLink NL-013 controlled-pilot readiness\n\n'
+
+readiness="$(curl --fail --silent --show-error --max-time 15 https://api.amsertech.com/api/health/ready 2>/dev/null || true)"
+if grep -Fq '"status":"ok"' <<<"${readiness}" \
+  && grep -Fq '"environment":"ultahost-pilot"' <<<"${readiness}"; then
+  pass 'Live API readiness is healthy and identifies the UltaHost pilot.'
+else
+  fail 'Live API readiness is not healthy or has the wrong environment identity.'
+fi
+
+registration="$(curl --fail --silent --show-error --max-time 15 https://api.amsertech.com/api/registration-status 2>/dev/null || true)"
+if grep -Fq '"mode":"pilot"' <<<"${registration}"; then
+  pass 'Registration remains restricted to controlled-pilot mode.'
+else
+  fail 'Registration is not in controlled-pilot mode.'
+fi
+
+if [[ -d "${API_ROOT}" ]]; then
+  consent_current="$(cd "${API_ROOT}" && sudo -u deploy php artisan tinker --execute="echo App\\Models\\User::whereNotNull('terms_accepted_at')->whereNotNull('privacy_accepted_at')->where('terms_version',config('registration.terms_version'))->where('privacy_version',config('registration.privacy_version'))->count();" 2>/dev/null | tail -n 1 || true)"
+  consent_total="$(cd "${API_ROOT}" && sudo -u deploy php artisan tinker --execute="echo App\\Models\\User::where('status','active')->count();" 2>/dev/null | tail -n 1 || true)"
+
+  if [[ "${consent_current}" =~ ^[0-9]+$ ]] && [[ "${consent_total}" =~ ^[0-9]+$ ]]; then
+    consent_pending=$((consent_total - consent_current))
+  else
+    consent_pending=-1
+  fi
+
+  if (( consent_pending == 0 )); then
+    pass "All ${consent_total} active accounts have current Terms and Privacy consent."
+  elif (( consent_pending > 0 )); then
+    blocked "${consent_pending} of ${consent_total} active accounts still require current Terms and Privacy consent."
+  else
+    fail 'Current policy-consent coverage could not be determined.'
+  fi
+else
+  fail "API root is unavailable at ${API_ROOT}."
+fi
+
+timer_started="$(systemctl show "${MONITOR_TIMER}" --property=ActiveEnterTimestamp --value 2>/dev/null || true)"
+timer_started_epoch="$(date -d "${timer_started}" +%s 2>/dev/null || true)"
+now_epoch="$(date +%s)"
+
+if [[ "${timer_started_epoch}" =~ ^[0-9]+$ ]]; then
+  observed_seconds=$((now_epoch - timer_started_epoch))
+  monitor_log="$(journalctl -u "${MONITOR_UNIT}" --since "${timer_started}" --no-pager -o cat 2>/dev/null || true)"
+  monitor_cycles="$(grep -c '^\[OK\] web:' <<<"${monitor_log}" || true)"
+  monitor_failures="$(grep -c '^\[FAIL\]' <<<"${monitor_log}" || true)"
+
+  if (( monitor_failures > 0 )); then
+    fail "The observation window contains ${monitor_failures} failed monitor check(s)."
+  elif (( observed_seconds >= REQUIRED_SECONDS )); then
+    pass "The monitoring window is at least 24 hours with ${monitor_cycles} healthy cycles and no failed checks."
+  else
+    remaining_seconds=$((REQUIRED_SECONDS - observed_seconds))
+    remaining_hours="$(awk -v seconds="${remaining_seconds}" 'BEGIN { printf "%.1f", seconds / 3600 }')"
+    blocked "The monitor has ${monitor_cycles} healthy cycles, but ${remaining_hours} more observation hour(s) are required."
+  fi
+else
+  fail "The activation time for ${MONITOR_TIMER} could not be determined."
+fi
+
+latest_backup="$(find "${BACKUP_ROOT}" -mindepth 1 -maxdepth 1 -type d -printf '%p\n' 2>/dev/null | sort | tail -n 1)"
+if [[ -n "${latest_backup}" ]] && (cd "${latest_backup}" && sha256sum -c SHA256SUMS >/dev/null 2>&1); then
+  pass "Latest backup $(basename "${latest_backup}") passed checksum verification."
+else
+  fail 'No checksum-verified production backup is available.'
+fi
+
+[[ "${POLICY_APPROVED}" == '1' ]] && pass 'Final policy wording and privacy contact are approved.' \
+  || blocked 'Final policy wording and the public privacy contact require approval.'
+[[ "${SUPPORT_OWNER_CONFIRMED}" == '1' ]] && pass 'Support and privacy-response ownership is confirmed.' \
+  || blocked 'Support and privacy-response ownership requires confirmation.'
+[[ "${PUBLIC_OPEN_AUTHORIZED}" == '1' ]] && pass 'Public registration opening is explicitly authorized.' \
+  || blocked 'Changing registration from pilot to open is not yet authorized.'
+
+printf '\nSummary: %d failure(s), %d opening blocker(s).\n' "${failures}" "${blockers}"
+
+if (( failures > 0 )); then
+  exit 1
+fi
+
+if (( blockers > 0 )); then
+  exit 2
+fi
+
+printf 'Decision: READY FOR CONTROLLED PUBLIC OPENING.\n'
