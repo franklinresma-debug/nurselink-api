@@ -61,19 +61,32 @@ timer_started_epoch="$(date -d "${timer_started}" +%s 2>/dev/null || true)"
 now_epoch="$(date +%s)"
 
 if [[ "${timer_started_epoch}" =~ ^[0-9]+$ ]]; then
-  observed_seconds=$((now_epoch - timer_started_epoch))
-  monitor_log="$(journalctl -u "${MONITOR_UNIT}" --since "${timer_started}" --no-pager -o cat 2>/dev/null || true)"
-  monitor_cycles="$(grep -c '^\[OK\] web:' <<<"${monitor_log}" || true)"
-  monitor_failures="$(grep -c '^\[FAIL\]' <<<"${monitor_log}" || true)"
+  full_monitor_log="$(journalctl -u "${MONITOR_UNIT}" --since "${timer_started}" --no-pager -o short-unix 2>/dev/null || true)"
+  last_failure_epoch="$(awk '/\[FAIL\]/{stamp=$1} END{if(stamp){sub(/\..*/,"",stamp); print stamp}}' <<<"${full_monitor_log}")"
+  observation_start_epoch="${timer_started_epoch}"
+
+  if [[ "${last_failure_epoch}" =~ ^[0-9]+$ ]] && (( last_failure_epoch >= observation_start_epoch )); then
+    observation_start_epoch=$((last_failure_epoch + 1))
+  fi
+
+  observation_start="$(date -d "@${observation_start_epoch}" --iso-8601=seconds)"
+  observed_seconds=$((now_epoch - observation_start_epoch))
+  healthy_monitor_log="$(journalctl -u "${MONITOR_UNIT}" --since "${observation_start}" --no-pager -o cat 2>/dev/null || true)"
+  monitor_cycles="$(grep -c '^\[OK\] web:' <<<"${healthy_monitor_log}" || true)"
+  monitor_failures="$(grep -c '^\[FAIL\]' <<<"${healthy_monitor_log}" || true)"
 
   if (( monitor_failures > 0 )); then
-    fail "The observation window contains ${monitor_failures} failed monitor check(s)."
+    fail "The current continuous observation window contains ${monitor_failures} failed monitor check(s)."
   elif (( observed_seconds >= REQUIRED_SECONDS )); then
     pass "The monitoring window is at least 24 hours with ${monitor_cycles} healthy cycles and no failed checks."
   else
     remaining_seconds=$((REQUIRED_SECONDS - observed_seconds))
     remaining_hours="$(awk -v seconds="${remaining_seconds}" 'BEGIN { printf "%.1f", seconds / 3600 }')"
-    blocked "The monitor has ${monitor_cycles} healthy cycles, but ${remaining_hours} more observation hour(s) are required."
+    if [[ "${last_failure_epoch}" =~ ^[0-9]+$ ]]; then
+      blocked "The continuous healthy window restarted after the latest failed check; ${monitor_cycles} healthy cycles are recorded and ${remaining_hours} more hour(s) are required."
+    else
+      blocked "The monitor has ${monitor_cycles} healthy cycles, but ${remaining_hours} more observation hour(s) are required."
+    fi
   fi
 else
   fail "The activation time for ${MONITOR_TIMER} could not be determined."
