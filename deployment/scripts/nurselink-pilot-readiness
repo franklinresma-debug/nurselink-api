@@ -6,6 +6,7 @@ BACKUP_ROOT="${NURSELINK_BACKUP_ROOT:-/root/nurselink-automated-backups}"
 MONITOR_UNIT="${NURSELINK_MONITOR_UNIT:-nurselink-monitor.service}"
 MONITOR_TIMER="${NURSELINK_MONITOR_TIMER:-nurselink-monitor.timer}"
 REQUIRED_SECONDS="${NURSELINK_PILOT_OBSERVATION_SECONDS:-86400}"
+MAIL_DOMAIN="${NURSELINK_MAIL_DOMAIN:-amsertech.com}"
 
 POLICY_APPROVED="${NURSELINK_POLICY_APPROVED:-0}"
 SUPPORT_OWNER_CONFIRMED="${NURSELINK_SUPPORT_OWNER_CONFIRMED:-0}"
@@ -97,6 +98,15 @@ if [[ -n "${latest_backup}" ]] && (cd "${latest_backup}" && sha256sum -c SHA256S
   pass "Latest backup $(basename "${latest_backup}") passed checksum verification."
 else
   fail 'No checksum-verified production backup is available.'
+fi
+
+mapfile -t dmarc_records < <(dig +short TXT "_dmarc.${MAIL_DOMAIN}" 2>/dev/null | grep -i 'v=DMARC1' || true)
+if (( ${#dmarc_records[@]} == 1 )); then
+  pass "${MAIL_DOMAIN} publishes exactly one DMARC policy."
+elif (( ${#dmarc_records[@]} > 1 )); then
+  blocked "${MAIL_DOMAIN} publishes ${#dmarc_records[@]} DMARC records; DNS must contain exactly one policy."
+else
+  fail "No DMARC policy could be resolved for ${MAIL_DOMAIN}."
 fi
 
 [[ "${POLICY_APPROVED}" == '1' ]] && pass 'Final policy wording and privacy contact are approved.' \
