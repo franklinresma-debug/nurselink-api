@@ -1,0 +1,27 @@
+NurseLink Stable Build Stamp
+============================
+
+Release: v5.5.9
+Status: STABLE
+Stamped UTC: 2026-08-27T12:21:41Z
+Production host: srv251098078
+
+Verification
+------------
+Production site: HTTP 200
+API health endpoint: HTTP 200
+Compatibility UAT: PASSED
+Laravel production caches: OPTIMIZED
+Nginx configuration test: PASSED
+
+Recovery baseline
+-----------------
+Baseline: NurseLink_Production_Baseline_20260827-120821
+Baseline SHA-256: 87575494c4ca72c8cbf3cd3c114e8ccd1719e20e3996bb247cf5ba6cd7889067
+Database: nurselink-post-uat-20260827-120821.sql.gz
+Database SHA-256: db180b2421e105a631f4c18748a57026dc9d6424cca7f0b3b1ca552d879ec5b0
+
+Designation
+-----------
+This is the approved stable production build and recovery reference for
+NurseLink v5.5.9 as of the timestamp above.

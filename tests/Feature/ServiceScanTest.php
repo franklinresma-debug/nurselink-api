@@ -26,6 +26,13 @@ class ServiceScanTest extends TestCase
             'updated_at' => now(),
         ]);
 
+        DB::table('nurselink_super_admin_access')->insert([
+            'user_id' => $user->id,
+            'active' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
         return $user;
     }
 

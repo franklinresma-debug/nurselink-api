@@ -866,6 +866,12 @@ class MembershipOnboardingController extends Controller
         string $memberNumber,
         string $standing
     ): array {
+        $coreMemberId = Schema::hasTable('members')
+            ? DB::table('members')
+                ->where('user_id', $userId)
+                ->value('id')
+            : null;
+
         $employmentCount =
             Schema::hasTable(
                 'nurselink_employment_histories'
@@ -879,6 +885,15 @@ class MembershipOnboardingController extends Controller
                     )
                     ->count()
                 : 0;
+
+        if (
+            $coreMemberId
+            && Schema::hasTable('portfolio_employment')
+        ) {
+            $employmentCount += DB::table('portfolio_employment')
+                ->where('member_id', $coreMemberId)
+                ->count();
+        }
 
         $credentialCount =
             Schema::hasTable(
@@ -907,6 +922,16 @@ class MembershipOnboardingController extends Controller
                     )
                     ->count()
                 : 0;
+
+        if (
+            $coreMemberId
+            && Schema::hasTable('portfolio_summaries')
+            && DB::table('portfolio_summaries')
+                ->where('member_id', $coreMemberId)
+                ->exists()
+        ) {
+            $portfolioCount++;
+        }
 
         $careerPreferences =
             Schema::hasTable(

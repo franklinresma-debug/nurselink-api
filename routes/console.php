@@ -35,6 +35,9 @@ Artisan::command('nurselink:make-super-admin {email}', function (string $email) 
 Schedule::command('nurselink:credentials-refresh --queue-due')->dailyAt('01:15')->withoutOverlapping();
 
 Schedule::command('nurselink:communications-dispatch --ingest')->everyFiveMinutes()->withoutOverlapping();
+if (config('email_management.sync_enabled')) {
+    Schedule::command('nurselink:email-sync --limit=50')->everyFiveMinutes()->withoutOverlapping();
+}
 
 Artisan::command('nurselink:analytics-snapshot', function (\App\Services\Analytics\AnalyticsSnapshotService $service) {
     $snapshot = $service->capture();

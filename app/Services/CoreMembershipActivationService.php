@@ -4,6 +4,8 @@ namespace App\Services;
 
 use App\Models\Member;
 use App\Models\MemberProfile;
+use App\Models\PortfolioEmployment;
+use App\Models\PortfolioSummary;
 use App\Models\Application;
 use App\Models\ApplicationStatusEvent;
 use App\Models\Role;
@@ -45,8 +47,9 @@ class CoreMembershipActivationService
             ? $application->profile_data
             : [];
 
+        $memberProfile = null;
         if ($profile || $applicationProfile !== []) {
-            MemberProfile::query()->updateOrCreate(['member_id' => $member->id], [
+            $memberProfile = MemberProfile::query()->updateOrCreate(['member_id' => $member->id], [
                 'first_name' => $applicationProfile['first_name'] ?? $profile?->first_name,
                 'middle_name' => $applicationProfile['middle_name'] ?? $profile?->middle_name,
                 'last_name' => $applicationProfile['last_name'] ?? $profile?->last_name,
@@ -65,6 +68,29 @@ class CoreMembershipActivationService
                     'application_id' => $application?->id,
                 ],
             ]);
+        }
+
+        if ($memberProfile) {
+            PortfolioSummary::query()->updateOrCreate(['member_id' => $member->id], [
+                'professional_headline' => $memberProfile->current_position
+                    ?: $memberProfile->professional_title
+                    ?: 'Registered Nurse',
+                'years_experience' => $memberProfile->years_experience,
+                'current_country' => is_string($memberProfile->country)
+                    && strlen($memberProfile->country) === 2
+                        ? strtoupper($memberProfile->country)
+                        : null,
+                'completion_percent' => 0,
+            ]);
+
+            if ($memberProfile->current_position && $memberProfile->current_employer) {
+                PortfolioEmployment::query()->firstOrCreate([
+                    'member_id' => $member->id,
+                    'position_title' => $memberProfile->current_position,
+                    'employer' => $memberProfile->current_employer,
+                    'is_current' => true,
+                ], ['status' => 'member_confirmed']);
+            }
         }
 
         if ($application) {
