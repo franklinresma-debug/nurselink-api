@@ -7,6 +7,7 @@ use App\Jobs\ProcessSmartRegistrationDocument;
 use App\Services\MembershipLifecycleService;
 use App\Services\SmartRegistration\LocalOcrService;
 use App\Services\SmartRegistration\SmartRegistrationDocumentProcessor;
+use App\Services\SmartRegistration\EligibilityInsightService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -25,7 +26,7 @@ class SmartRegistrationController extends Controller
 
     private const LOW_CONFIDENCE_THRESHOLD = 0.75;
 
-    public function show(Request $request, LocalOcrService $ocr): JsonResponse
+    public function show(Request $request, LocalOcrService $ocr, EligibilityInsightService $eligibility): JsonResponse
     {
         $user = $request->user();
         $profile = $this->ensureProfile($user);
@@ -44,6 +45,7 @@ class SmartRegistrationController extends Controller
                 'missing' => $missing,
                 'completion' => $this->completion($missing),
                 'membership' => $this->presentMembership($membership),
+                'eligibility_insights' => $eligibility->forProfile($profile, $documents),
                 'extraction_capabilities' => [
                     ...$ocr->capabilities(),
                     'note' => 'Automatic extraction assists data entry only. Applicants must review and confirm extracted values; credential verification remains reviewer-controlled.',
