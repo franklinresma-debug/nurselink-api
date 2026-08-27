@@ -70,10 +70,16 @@ class AdminMembershipCommandController extends Controller
             'approved',
             'declined',
         ])->mapWithKeys(function (string $status): array {
+            $profileUpdates = in_array($status, ['submitted', 'under_review', 'needs_information', 'ready_for_approval'], true)
+                ? DB::table('nurselink_memberships')
+                    ->where('status', 'approved')
+                    ->where('profile_update_status', $status)
+                    ->count()
+                : 0;
             return [
                 $status => DB::table('nurselink_memberships')
                     ->where('status', $status)
-                    ->count(),
+                    ->count() + $profileUpdates,
             ];
         });
 
@@ -112,7 +118,15 @@ class AdminMembershipCommandController extends Controller
         $query = DB::table('nurselink_memberships as m');
 
         if (! empty($data['status'])) {
-            $query->where('m.status', $data['status']);
+            $status = $data['status'];
+            $query->where(function ($query) use ($status): void {
+                $query->where('m.status', $status);
+                if (in_array($status, ['submitted', 'under_review', 'needs_information', 'ready_for_approval'], true)) {
+                    $query->orWhere(function ($query) use ($status): void {
+                        $query->where('m.status', 'approved')->where('m.profile_update_status', $status);
+                    });
+                }
+            });
         }
 
         $memberships = $query
@@ -149,13 +163,20 @@ class AdminMembershipCommandController extends Controller
                 ? ($reviewers[(string) $row->reviewed_by] ?? null)
                 : null;
 
+            $isProfileUpdate = $row->status === 'approved' && ! empty($row->profile_update_status);
+            $reviewStatus = $isProfileUpdate ? (string) $row->profile_update_status : (string) $row->status;
+
             return [
                 'id' => (int) $row->id,
                 'user_id' => (string) $row->user_id,
                 'name' => $user['name'] ?? (string) $row->user_id,
                 'email' => $user['email'] ?? '',
-                'status' => $row->status,
-                'status_label' => $this->statusLabel((string) $row->status),
+                'status' => $reviewStatus,
+                'status_label' => $isProfileUpdate
+                    ? 'Member Update · '.$this->statusLabel($reviewStatus)
+                    : $this->statusLabel($reviewStatus),
+                'membership_status' => $row->status,
+                'is_profile_update' => $isProfileUpdate,
                 'member_number' => $row->member_number,
                 'reviewer_notes' => $row->reviewer_notes,
                 'reviewed_by' => $row->reviewed_by,
@@ -168,7 +189,7 @@ class AdminMembershipCommandController extends Controller
                 'is_self' => (string) $row->user_id
                     === (string) $request->user()->getKey(),
                 'allowed_actions' => $this->allowedTransitions(
-                    (string) $row->status,
+                    $reviewStatus,
                     $access
                 ),
             ];
@@ -330,6 +351,10 @@ class AdminMembershipCommandController extends Controller
                     'approved_at' => $membership->approved_at,
                     'declined_at' => $membership->declined_at,
                     'updated_at' => $membership->updated_at,
+                    'is_profile_update' => $membership->status === 'approved' && ! empty($membership->profile_update_status),
+                    'profile_update_status' => $membership->profile_update_status ?? null,
+                    'profile_update_submitted_at' => $membership->profile_update_submitted_at ?? null,
+                    'profile_update_reviewer_notes' => $membership->profile_update_reviewer_notes ?? null,
                 ],
                 'applicant' => $user,
                 'profile' => [
@@ -347,7 +372,9 @@ class AdminMembershipCommandController extends Controller
                 ],
                 'review' => [
                     'allowed_actions' => $this->allowedTransitions(
-                        (string) $membership->status,
+                        $membership->status === 'approved' && ! empty($membership->profile_update_status)
+                            ? (string) $membership->profile_update_status
+                            : (string) $membership->status,
                         $access
                     ),
                     'is_self' => (string) $membership->user_id
@@ -517,6 +544,10 @@ class AdminMembershipCommandController extends Controller
             ->first();
 
         abort_unless($before, 404);
+
+        if ($before->status === 'approved' && ! empty($before->profile_update_status)) {
+            return $this->transitionProfileUpdate($request, $before, $data, $access);
+        }
 
         if (in_array($before->status, ['approved', 'declined'], true)) {
             return response()->json([
@@ -761,6 +792,41 @@ class AdminMembershipCommandController extends Controller
                 'self_action_audited' => $isSelf,
                 'notification_delivery' => $delivery,
             ],
+        ]);
+    }
+
+    private function transitionProfileUpdate(Request $request, object $membership, array $data, array $access): JsonResponse
+    {
+        $current = (string) $membership->profile_update_status;
+        $allowed = $this->allowedTransitions($current, $access);
+
+        if (! in_array($data['status'], $allowed, true)) {
+            return response()->json(['message' => 'That member update review action is not allowed.', 'allowed_actions' => $allowed], 422);
+        }
+        if ($data['status'] === 'approved' && ! $access['is_admin']) {
+            abort(403, 'Administrator access is required to approve member profile updates.');
+        }
+        $reason = trim((string) ($data['decision_reason'] ?? ''));
+        if ($data['status'] === 'needs_information' && $reason === '') {
+            return response()->json(['message' => 'A reason is required when requesting more information.'], 422);
+        }
+
+        $storedStatus = $data['status'] === 'approved' ? 'approved' : $data['status'];
+        DB::table('nurselink_memberships')->where('id', $membership->id)->update([
+            'profile_update_status' => $storedStatus,
+            'profile_update_reviewed_at' => now(),
+            'profile_update_reviewer_notes' => $reason !== '' ? $reason : ($data['reviewer_notes'] ?? null),
+            'updated_at' => now(),
+        ]);
+
+        $after = DB::table('nurselink_memberships')->where('id', $membership->id)->first();
+        $this->audit($request, 'membership.profile_update_reviewed', 'membership', (string) $membership->id, $membership, $after);
+
+        return response()->json([
+            'message' => $data['status'] === 'approved'
+                ? 'Member Smart Registration updates approved. Membership remained active.'
+                : 'Member Smart Registration update review status changed.',
+            'data' => $after,
         ]);
     }
 

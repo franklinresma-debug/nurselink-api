@@ -299,9 +299,26 @@ class SmartRegistrationController extends Controller
         $membership = $this->ensureDraftMembership($user);
 
         if ($membership->status === 'approved') {
+            $pending = (string) ($membership->profile_update_status ?? '');
+            if (in_array($pending, ['submitted', 'under_review', 'ready_for_approval'], true)) {
+                return response()->json([
+                    'message' => 'Your Smart Registration update is already with a reviewer.',
+                    'data' => $this->presentMembership($membership),
+                ], 422);
+            }
+
+            DB::table('nurselink_memberships')->where('id', $membership->id)->update([
+                'profile_update_status' => 'submitted',
+                'profile_update_submitted_at' => now(),
+                'profile_update_reviewed_at' => null,
+                'profile_update_reviewer_notes' => null,
+                'updated_at' => now(),
+            ]);
+
+            $updated = DB::table('nurselink_memberships')->where('id', $membership->id)->first();
             return response()->json([
-                'message' => 'Your NurseLink membership is already approved.',
-                'data' => $this->presentMembership($membership),
+                'message' => 'Your Smart Registration updates were submitted for reviewer verification. Your membership remains approved and active.',
+                'data' => $this->presentMembership($updated),
             ]);
         }
 
@@ -406,11 +423,18 @@ class SmartRegistrationController extends Controller
             return;
         }
 
+        if ($membership->status === 'approved') {
+            $updateStatus = (string) ($membership->profile_update_status ?? '');
+            if (! in_array($updateStatus, ['submitted', 'under_review', 'ready_for_approval'], true)) {
+                return;
+            }
+        }
+
         $messages = [
             'submitted' => 'Your application has been submitted and is locked while waiting for review.',
             'under_review' => 'Your application is currently under review and cannot be changed unless a reviewer requests more information.',
             'ready_for_approval' => 'Your application is awaiting final approval and cannot be changed.',
-            'approved' => 'Your membership is approved. Use your member profile to update information.',
+            'approved' => 'Your Smart Registration update is locked while it is with a reviewer.',
             'declined' => 'This application has a completed decision. Contact NurseLink Support if it needs to be reopened.',
         ];
 
@@ -745,6 +769,10 @@ class SmartRegistrationController extends Controller
             'member_number' => $row->member_number ?? null,
             'approved_at' => $row->approved_at ?? null,
             'last_status_changed_at' => $row->last_status_changed_at ?? null,
+            'profile_update_status' => $row->profile_update_status ?? null,
+            'profile_update_submitted_at' => $row->profile_update_submitted_at ?? null,
+            'profile_update_reviewed_at' => $row->profile_update_reviewed_at ?? null,
+            'profile_update_reviewer_notes' => $row->profile_update_reviewer_notes ?? null,
             'status_history' => app(MembershipLifecycleService::class)
                 ->historyForApplicant((int) $row->id),
         ];
