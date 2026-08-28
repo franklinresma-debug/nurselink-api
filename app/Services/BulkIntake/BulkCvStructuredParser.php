@@ -971,7 +971,7 @@ class BulkCvStructuredParser
             ],
             [
                 'pattern' =>
-                    '/\bAdvanced Cardiovascular Life Support(?:\s+with AED training)?\b/iu',
+                    '/\b(?:Advanced Cardiovascular Life Support|ACLS)(?:\s+with AED training)?\b/iu',
                 'category' =>
                     'certification',
                 'type' =>
@@ -987,7 +987,7 @@ class BulkCvStructuredParser
             ],
             [
                 'pattern' =>
-                    '/\bBasic Life Support\b/iu',
+                    '/\b(?:Basic Life Support|BLS)\b/iu',
                 'category' =>
                     'certification',
                 'type' =>
@@ -1032,6 +1032,42 @@ class BulkCvStructuredParser
                     null,
                 'confidence' =>
                     0.86,
+            ],
+            [
+                'pattern' => '/\b(?:Basic Life (?:and )?Safety|Fire Prevention)\b/iu',
+                'category' => 'training', 'type' => 'training_certificate',
+                'title' => 'Basic Life Safety and Fire Prevention',
+                'authority' => null, 'country' => null, 'confidence' => 0.82,
+            ],
+            [
+                'pattern' => '/\bInfection Control(?:\s+and\s+Child Abuse)?\b/iu',
+                'category' => 'training', 'type' => 'training_certificate',
+                'title' => 'Infection Control Training',
+                'authority' => null, 'country' => null, 'confidence' => 0.84,
+            ],
+            [
+                'pattern' => '/\b(?:Critical Elements in )?Dialy[sz]er Reprocessing\b/iu',
+                'category' => 'training', 'type' => 'training_certificate',
+                'title' => 'Dialyser Reprocessing Training',
+                'authority' => null, 'country' => null, 'confidence' => 0.86,
+            ],
+            [
+                'pattern' => '/\b(?:Basic Dialysis Program|Competence in Practice\s*\(\s*Dialysis\s*\))\b/iu',
+                'category' => 'training', 'type' => 'training_certificate',
+                'title' => 'Dialysis Practice Training',
+                'authority' => null, 'country' => null, 'confidence' => 0.84,
+            ],
+            [
+                'pattern' => '/\bVascular Access Training\b/iu',
+                'category' => 'training', 'type' => 'training_certificate',
+                'title' => 'Vascular Access Training',
+                'authority' => null, 'country' => null, 'confidence' => 0.86,
+            ],
+            [
+                'pattern' => '/\bMentorship Program\b/iu',
+                'category' => 'training', 'type' => 'training_certificate',
+                'title' => 'Clinical Mentorship Program',
+                'authority' => null, 'country' => null, 'confidence' => 0.80,
             ],
         ];
 
@@ -1200,6 +1236,18 @@ class BulkCvStructuredParser
 
             'patient assessment and monitoring' =>
                 'Patient Monitoring',
+
+            'medical/surgical' => 'Medical-Surgical Nursing',
+            'renal cases' => 'Renal Nursing Care',
+            'handling different machines' => 'Clinical Equipment Handling',
+            'hospital apparatus and equipment' => 'Clinical Equipment Handling',
+            'administration of medications' => 'Medication Administration',
+            'documentation and collaboration' => 'Clinical Documentation and Team Collaboration',
+            'in charge duties' => 'Charge Nurse Leadership',
+            'supervisory' => 'Clinical Supervision',
+            'head nurse duties' => 'Head Nurse Leadership',
+            'mentorship to the new staff' => 'Staff Mentorship',
+            'skills application and evaluation' => 'Clinical Skills Evaluation',
         ];
 
         $seen = [];
