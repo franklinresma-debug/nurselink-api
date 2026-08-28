@@ -1059,6 +1059,11 @@ Route::middleware(
     );
 
     Route::post(
+        '/nurselink/encoder/bulk-intake/{batchId}/candidates/{candidateId}/records/reject-all',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'rejectAllStructuredRecords']
+    );
+
+    Route::post(
         '/nurselink/encoder/bulk-intake/{batchId}/candidates/{candidateId}/records/{type}',
         [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'createStructuredRecord']
     );

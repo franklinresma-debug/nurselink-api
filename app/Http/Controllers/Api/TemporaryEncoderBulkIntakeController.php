@@ -1306,6 +1306,83 @@ class TemporaryEncoderBulkIntakeController extends Controller
         ]);
     }
 
+    public function rejectAllStructuredRecords(
+        Request $request,
+        int $batchId,
+        int $candidateId
+    ): JsonResponse {
+        $account = $this->encoder();
+
+        $this->batch($account, $batchId);
+        $this->bulkCandidate($batchId, $candidateId);
+
+        $data = $request->validate([
+            'review_notes' => ['required', 'string', 'max:6000'],
+        ]);
+
+        $tables = [
+            'education' => 'nurselink_bulk_intake_education',
+            'employment' => 'nurselink_bulk_intake_employment',
+            'credentials' => 'nurselink_bulk_intake_credentials',
+            'competencies' => 'nurselink_bulk_intake_competencies',
+            'languages' => 'nurselink_bulk_intake_languages',
+            'references' => 'nurselink_bulk_intake_references',
+        ];
+
+        $rejected = [];
+
+        DB::transaction(function () use ($request, $account, $batchId, $candidateId, $data, $tables, &$rejected): void {
+            foreach ($tables as $type => $table) {
+                $before = DB::table($table)
+                    ->where('candidate_id', $candidateId)
+                    ->where('review_status', 'review_required')
+                    ->get();
+
+                $rejected[$type] = $before->count();
+
+                if ($before->isEmpty()) {
+                    continue;
+                }
+
+                $update = [
+                    'review_status' => 'rejected',
+                    'review_notes' => trim($data['review_notes']),
+                    'updated_at' => now(),
+                ];
+
+                if ($type === 'references') {
+                    $update['privacy_status'] = 'private';
+                }
+
+                DB::table($table)
+                    ->where('candidate_id', $candidateId)
+                    ->where('review_status', 'review_required')
+                    ->update($update);
+
+                $this->audit(
+                    $request,
+                    $account,
+                    $batchId,
+                    $candidateId,
+                    null,
+                    'bulk.structured_records_rejected.'.$type,
+                    ['count' => $before->count()],
+                    ['count' => $before->count(), 'review_notes' => trim($data['review_notes'])]
+                );
+            }
+        });
+
+        return response()->json([
+            'message' => 'All pending structured records rejected for staging review.',
+            'data' => $rejected,
+            'governance' => [
+                'credential_verification_changed' => false,
+                'permanent_account_created' => false,
+                'membership_approved' => false,
+            ],
+        ]);
+    }
+
 
     public function createStructuredRecord(
         Request $request,
