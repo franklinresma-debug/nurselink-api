@@ -49,6 +49,12 @@ class LocalOcrService
 
         $this->addRegexField($fields, 'email', $compact, '/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/iu', 0.94);
         $this->addRegexField($fields, 'phone', $compact, '/(?<!\d)(?:\+?63|0)?9\d{9}(?!\d)/u', 0.88);
+        if (! isset($fields['phone']) && preg_match('/\+\d{1,3}[\s-]?\d[\d\s-]{6,16}(?!\d)/u', $compact, $phone)) {
+            $fields['phone'] = [
+                'value' => trim(preg_replace('/\s+/u', ' ', $phone[0]) ?? $phone[0]),
+                'confidence' => 0.90,
+            ];
+        }
 
         $patterns = [
             'first_name' => ['first name'],
@@ -138,6 +144,25 @@ class LocalOcrService
                     break 2;
                 }
             }
+        }
+
+        if (! isset($fields['first_name']) || ! isset($fields['last_name'])) {
+            for ($index = 0; $index + 1 < count($heading); $index++) {
+                $combined = trim($heading[$index].' '.$heading[$index + 1]);
+                $combined = trim(preg_replace('/,\s*(?:R\.?N\.?|RM|LPN|BSN|MSN)\b.*$/iu', '', $combined) ?? '');
+                $name = $this->parseCvName($combined);
+                if ($name === []) {
+                    continue;
+                }
+                foreach ($name as $field => $value) {
+                    $fields[$field] ??= ['value' => $value, 'confidence' => 0.90];
+                }
+                break;
+            }
+        }
+
+        if (! isset($fields['country']) && preg_match('/\bSingapore\b/iu', implode("\n", $heading))) {
+            $fields['country'] = ['value' => 'Singapore', 'confidence' => 0.82];
         }
 
         /* NurseLink CV Maker places “Full Name, RN” near the page heading. */

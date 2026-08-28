@@ -117,6 +117,8 @@ class BulkCvStructuredParser
             }
         );
 
+        $this->promoteStructuredFields($candidateId);
+
         return [
             'education' =>
                 DB::table(
@@ -184,6 +186,43 @@ class BulkCvStructuredParser
                     )
                     ->count(),
         ];
+    }
+
+    /** Promote the latest document-supported records into the review header. */
+    private function promoteStructuredFields(int $candidateId): void
+    {
+        $candidate = DB::table('nurselink_bulk_intake_candidates')->where('id', $candidateId)->first();
+        if (! $candidate) {
+            return;
+        }
+
+        $employment = DB::table('nurselink_bulk_intake_employment')
+            ->where('candidate_id', $candidateId)
+            ->orderByDesc('is_current')
+            ->orderByDesc('started_on')
+            ->first();
+        $education = DB::table('nurselink_bulk_intake_education')
+            ->where('candidate_id', $candidateId)
+            ->orderByDesc('completed_on')
+            ->first();
+
+        $updates = ['updated_at' => now()];
+        if (empty($candidate->current_position) && ! empty($employment?->position_title)) {
+            $updates['current_position'] = $employment->position_title;
+        }
+        if (empty($candidate->current_employer) && ! empty($employment?->employer)) {
+            $updates['current_employer'] = $employment->employer;
+        }
+        if (empty($candidate->highest_nursing_education) && ! empty($education?->qualification)) {
+            $updates['highest_nursing_education'] = $education->qualification;
+        }
+        if (empty($candidate->graduation_year) && ! empty($education?->completed_on)) {
+            $updates['graduation_year'] = (int) substr((string) $education->completed_on, 0, 4);
+        }
+
+        if (count($updates) > 1) {
+            DB::table('nurselink_bulk_intake_candidates')->where('id', $candidateId)->update($updates);
+        }
     }
 
 
