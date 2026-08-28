@@ -795,7 +795,7 @@ class BulkCvStructuredParser
         $count = count($lines);
 
         for ($i = 0; $i < $count; $i++) {
-            if (! preg_match('/^([\p{L}][\p{L} /&().-]{2,100}):\s*(.*)$/u', (string) $lines[$i], $match)) {
+            if (! preg_match('/^([\p{L}][\p{L} \/&().-]{2,100}):\s*(.*)$/u', (string) $lines[$i], $match)) {
                 continue;
             }
 
