@@ -77,6 +77,10 @@ class LocalOcrService
             ];
         }
 
+        if ($documentType === 'cv') {
+            $this->extractCvHeadingFields($fields, $lines);
+        }
+
         if (! isset($fields['professional_title']) && preg_match('/\b(registered nurse|staff nurse|charge nurse|head nurse|nurse manager|clinical nurse|nursing officer|nurse educator|nurse practitioner)\b/iu', $compact, $match)) {
             $fields['professional_title'] = ['value' => ucwords(mb_strtolower($match[1])), 'confidence' => $documentType === 'cv' ? 0.86 : 0.72];
         }
@@ -98,6 +102,115 @@ class LocalOcrService
         }
 
         return array_filter($fields, fn (array $candidate): bool => ($candidate['value'] ?? null) !== null && $candidate['value'] !== '');
+    }
+
+    private function extractCvHeadingFields(array &$fields, array $lines): void
+    {
+        $heading = array_slice($lines, 0, 18);
+
+        if (! isset($fields['first_name']) || ! isset($fields['last_name'])) {
+            foreach ($heading as $index => $line) {
+                if (! preg_match('/\b(curriculum vitae|resume|résumé)\b/iu', $line)) {
+                    continue;
+                }
+
+                foreach (array_slice($heading, $index + 1, 4) as $nameLine) {
+                    $name = $this->parseCvName($nameLine);
+                    if ($name === []) {
+                        continue;
+                    }
+
+                    foreach ($name as $field => $value) {
+                        $fields[$field] ??= [
+                            'value' => $value,
+                            'confidence' => 0.76,
+                        ];
+                    }
+
+                    break 2;
+                }
+            }
+        }
+
+        if (! isset($fields['address_line1'])) {
+            foreach ($heading as $line) {
+                if (! preg_match('/^\d{1,5}\s+.+|\b(street|st\.|road|rd\.|avenue|ave\.|barangay|village|subdivision)\b/iu', $line)) {
+                    continue;
+                }
+
+                $fields['address_line1'] = [
+                    'value' => mb_substr($line, 0, 255),
+                    'confidence' => 0.72,
+                ];
+
+                if (! isset($fields['city']) && preg_match('/\b([\p{L}-]+\s+city)\b/iu', $line, $city)) {
+                    $fields['city'] = [
+                        'value' => $city[1],
+                        'confidence' => 0.74,
+                    ];
+                }
+
+                if (! isset($fields['country']) && preg_match('/\b(philippines|phil\.)\b/iu', $line)) {
+                    $fields['country'] = [
+                        'value' => 'Philippines',
+                        'confidence' => 0.84,
+                    ];
+                }
+
+                break;
+            }
+        }
+
+        if (! isset($fields['current_position'])) {
+            foreach ($lines as $line) {
+                if (preg_match('/^(.{3,100}?):.{0,100}\b(?:present|current)\b/iu', $line, $match)) {
+                    $fields['current_position'] = [
+                        'value' => trim($match[1]),
+                        'confidence' => 0.70,
+                    ];
+
+                    break;
+                }
+            }
+        }
+    }
+
+    private function parseCvName(string $line): array
+    {
+        $clean = trim(preg_replace('/\([^)]*\)/u', '', $line) ?? '');
+        $clean = preg_replace('/^[^\p{L}]+/u', '', $clean) ?? $clean;
+
+        if (! preg_match('/^[\p{L} .\'-]{5,120}$/u', $clean)) {
+            return [];
+        }
+
+        $parts = array_values(array_filter(
+            preg_split('/\s+/u', $clean) ?: [],
+            fn (string $part): bool => preg_match('/^[\p{L}.\'-]+$/u', $part) === 1
+        ));
+
+        if (count($parts) < 2 || count($parts) > 6) {
+            return [];
+        }
+
+        $last = array_pop($parts);
+        $first = $parts[0];
+
+        if (mb_strtolower($first) === 'ma.' && count($parts) > 1) {
+            $first .= ' '.$parts[1];
+            array_splice($parts, 1, 1);
+        }
+
+        $result = [
+            'first_name' => $first,
+            'last_name' => $last,
+        ];
+
+        if (count($parts) > 1) {
+            $result['middle_name'] = implode(' ', array_slice($parts, 1));
+        }
+
+        return $result;
     }
 
     public function capabilities(): array
