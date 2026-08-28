@@ -302,10 +302,15 @@ class LocalOcrService
                     $cells = [];
                     preg_match_all('/<c\\b([^>]*)>(.*?)<\\/c>/si', $rowXml, $cellMatches, PREG_SET_ORDER);
 
-                    foreach ($cellMatches as $cell) {
+                    foreach ($cellMatches as $cellIndex => $cell) {
                         $attributes = $cell[1] ?? '';
                         $body = $cell[2] ?? '';
                         $value = '';
+                        $column = $cellIndex;
+
+                        if (preg_match('/\br="([A-Z]+)\d+"/i', $attributes, $reference)) {
+                            $column = $this->xlsxColumnIndex($reference[1]);
+                        }
 
                         if (preg_match('/t="s"/i', $attributes) && preg_match('/<v>(.*?)<\\/v>/si', $body, $valueMatch)) {
                             $value = $sharedStrings[(int) trim($valueMatch[1])] ?? '';
@@ -315,7 +320,15 @@ class LocalOcrService
                             $value = html_entity_decode(trim(strip_tags($valueMatch[1])), ENT_QUOTES | ENT_XML1, 'UTF-8');
                         }
 
-                        $cells[] = trim($value);
+                        $cells[$column] = trim($value);
+                    }
+
+                    if ($cells !== []) {
+                        ksort($cells);
+                        $cells = array_map(
+                            fn (int $index): string => $cells[$index] ?? '',
+                            range(0, max(array_keys($cells)))
+                        );
                     }
 
                     $line = trim(implode("\\t", $cells));
@@ -352,6 +365,16 @@ class LocalOcrService
         }
 
         return '';
+    }
+
+    private function xlsxColumnIndex(string $column): int
+    {
+        $index = 0;
+        foreach (str_split(strtoupper($column)) as $letter) {
+            $index = ($index * 26) + (ord($letter) - 64);
+        }
+
+        return max(0, $index - 1);
     }
 
     private function extractPdfText(string $path): string

@@ -65,10 +65,9 @@ class BulkNurseIntakeIntelligenceService
                 ->delete();
 
             /*
-             * One intake batch belongs to one new candidate. A CV,
-             * licences, certificates, and supporting documents are merged
-             * into that one review record instead of being split by OCR
-             * identifiers discovered in individual files.
+             * A normal intake batch belongs to one candidate.  A roster
+             * spreadsheet is the intentional exception: each populated
+             * data row represents a separate candidate for review.
              */
             $items = [];
 
@@ -81,7 +80,18 @@ class BulkNurseIntakeIntelligenceService
                 ];
             }
 
-            if ($items !== []) {
+            $rosterCandidates = $this->rosterCandidates($files);
+
+            if ($rosterCandidates !== []) {
+                foreach ($rosterCandidates as $index => $candidateItems) {
+                    $this->createCandidate(
+                        $batchId,
+                        'roster:'.$batchId.':'.($index + 1),
+                        $candidateItems,
+                        false
+                    );
+                }
+            } elseif ($items !== []) {
                 $this->createCandidate(
                     $batchId,
                     'batch:'.$batchId,
@@ -253,7 +263,8 @@ class BulkNurseIntakeIntelligenceService
     private function createCandidate(
         int $batchId,
         string $groupingKey,
-        array $items
+        array $items,
+        bool $linkSourceFiles = true
     ): void {
         $merged = [];
         $confidence = [];
@@ -495,13 +506,15 @@ class BulkNurseIntakeIntelligenceService
             'updated_at' => now(),
         ]);
 
-        DB::table('nurselink_bulk_intake_files')
-            ->whereIn('id', $sourceFiles)
-            ->update([
-                'candidate_id' => $candidateId,
-                'grouping_key' => $groupingKey,
-                'updated_at' => now(),
-            ]);
+        if ($linkSourceFiles) {
+            DB::table('nurselink_bulk_intake_files')
+                ->whereIn('id', $sourceFiles)
+                ->update([
+                    'candidate_id' => $candidateId,
+                    'grouping_key' => $groupingKey,
+                    'updated_at' => now(),
+                ]);
+        }
 
         $this->createCredentialCandidates(
             $candidateId,
@@ -1182,6 +1195,126 @@ class BulkNurseIntakeIntelligenceService
                     PATHINFO_FILENAME
                 ),
         };
+    }
+
+    /**
+     * Turn an uploaded roster worksheet into one review candidate per row.
+     * The spreadsheet itself stays at batch level for audit because one file
+     * can legitimately be the source of many candidates.
+     */
+    private function rosterCandidates($files): array
+    {
+        $candidates = [];
+
+        foreach ($files as $file) {
+            if (! in_array(strtolower((string) ($file->extension ?? '')), ['xls', 'xlsx'], true)) {
+                continue;
+            }
+
+            $lines = array_values(array_filter(
+                array_map('trim', preg_split('/\n/u', (string) ($file->extracted_text ?? '')) ?: []),
+                fn (string $line): bool => $line !== '' && ! str_starts_with($line, 'Worksheet ')
+            ));
+
+            if (count($lines) < 2) {
+                continue;
+            }
+
+            $headers = array_map(
+                fn (string $value): string => $this->rosterHeader($value),
+                explode("\t", array_shift($lines))
+            );
+
+            foreach ($lines as $line) {
+                $values = explode("\t", $line);
+                $row = [];
+                foreach ($headers as $index => $header) {
+                    if ($header !== '') {
+                        $row[$header] = trim((string) ($values[$index] ?? ''));
+                    }
+                }
+
+                $fields = $this->rosterFields($row);
+                if ($fields === []) {
+                    continue;
+                }
+
+                $candidates[] = [[
+                    'file' => $file,
+                    'fields' => $fields,
+                ]];
+            }
+        }
+
+        return $candidates;
+    }
+
+    private function rosterHeader(string $header): string
+    {
+        return mb_strtolower(trim(preg_replace('/\s+/u', ' ', $header) ?? $header));
+    }
+
+    private function rosterFields(array $row): array
+    {
+        $value = function (array $needles) use ($row): ?string {
+            foreach ($row as $header => $cell) {
+                foreach ($needles as $needle) {
+                    if (str_contains($header, $needle) && $cell !== '') {
+                        return mb_substr($cell, 0, 255);
+                    }
+                }
+            }
+            return null;
+        };
+        $add = function (array &$fields, string $field, ?string $cell, float $confidence = 0.97): void {
+            if ($cell !== null && trim($cell) !== '') {
+                $fields[$field] = ['value' => trim($cell), 'confidence' => $confidence];
+            }
+        };
+
+        $fields = [];
+        $add($fields, 'email', $value(['email']), 0.99);
+        $add($fields, 'phone', $value(['mobile', 'phone', 'contact number']), 0.98);
+        $add($fields, 'birth_date', $value(['date of birth', 'birth date', 'birthday']), 0.98);
+        $add($fields, 'nationality', $value(['nationality', 'citizenship']), 0.98);
+        $add($fields, 'address_line1', $value(['permanent address', 'address']), 0.95);
+        $add($fields, 'current_employer', $value(['hospital', 'healthcare facility', 'employer']), 0.90);
+        $add($fields, 'current_position', $value(['position', 'designation', 'job title']), 0.90);
+
+        $fullName = $value(['full name', 'name of applicant', 'applicant name']);
+        if ($fullName !== null) {
+            $name = $this->rosterName($fullName);
+            foreach ($name as $field => $cell) {
+                $add($fields, $field, $cell, 0.96);
+            }
+        }
+
+        return $fields;
+    }
+
+    private function rosterName(string $name): array
+    {
+        $parts = array_values(array_filter(preg_split('/\s+/u', trim($name)) ?: []));
+        if (count($parts) < 2) {
+            return [];
+        }
+
+        $last = array_pop($parts);
+        $first = array_shift($parts);
+        if (mb_strtolower($first) === 'ma.' && $parts !== []) {
+            $first .= ' '.array_shift($parts);
+        }
+
+        $result = ['first_name' => $first, 'last_name' => $last];
+        if ($parts !== []) {
+            $middle = implode(' ', $parts);
+            if (preg_match('/^[\p{L}]\.$/u', $middle)) {
+                $result['middle_initial'] = $middle;
+            } else {
+                $result['middle_name'] = $middle;
+            }
+        }
+        return $result;
     }
 
     private function refreshBatch(
