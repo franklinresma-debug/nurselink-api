@@ -28,6 +28,8 @@ class LocalOcrService
         return [
             'document_type' => $documentType,
             'status' => $text === '' ? 'needs_input' : 'extracted',
+            /* Stored internally for structured CV section extraction. */
+            'text' => $text,
             'fields' => $fields,
             'message' => $this->message($extension, $text !== ''),
         ];

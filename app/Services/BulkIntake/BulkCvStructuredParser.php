@@ -779,6 +779,85 @@ class BulkCvStructuredParser
                         now(),
                 ]);
         }
+
+        $this->stageGenericCvEmployment(
+            $candidateId,
+            $fileId,
+            $lines
+        );
+    }
+
+    private function stageGenericCvEmployment(
+        int $candidateId,
+        int $fileId,
+        array $lines
+    ): void {
+        $count = count($lines);
+
+        for ($i = 0; $i < $count; $i++) {
+            if (! preg_match('/^([\p{L}][\p{L} /&().-]{2,100}):\s*(.*)$/u', (string) $lines[$i], $match)) {
+                continue;
+            }
+
+            $title = trim($match[1]);
+            $detail = trim($match[2]);
+
+            if (preg_match('/\b(work experience|education|reference|skill|competenc)/iu', $title)) {
+                continue;
+            }
+
+            $dateText = null;
+            $datePattern = '/\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}\s*(?:-|–|to|up to)\s*(?:present|(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4})\b/iu';
+
+            if (preg_match($datePattern, $detail, $dateMatch)) {
+                $dateText = $dateMatch[0];
+            } else {
+                for ($j = $i + 1; $j < min($count, $i + 4); $j++) {
+                    if (preg_match($datePattern, (string) $lines[$j], $dateMatch)) {
+                        $dateText = $dateMatch[0];
+                        break;
+                    }
+                }
+            }
+
+            if (! $dateText) {
+                continue;
+            }
+
+            $exists = DB::table('nurselink_bulk_intake_employment')
+                ->where('candidate_id', $candidateId)
+                ->where('source_file_id', $fileId)
+                ->whereRaw('LOWER(position_title) = ?', [mb_strtolower($title)])
+                ->exists();
+
+            if ($exists) {
+                continue;
+            }
+
+            $employer = preg_replace($datePattern, '', $detail) ?? $detail;
+            $employer = trim(preg_replace('/\s*[.·-]\s*$/u', '', $employer) ?? $employer);
+            $employer = $employer !== '' ? mb_substr($employer, 0, 255) : null;
+
+            [$startedOn, $endedOn, $current] = $this->employmentDates($dateText);
+
+            DB::table('nurselink_bulk_intake_employment')->insert([
+                'candidate_id' => $candidateId,
+                'source_file_id' => $fileId,
+                'position_title' => $title,
+                'employer' => $employer,
+                'facility_type' => null,
+                'country' => str_contains(mb_strtolower($detail), 'ksa') ? 'Saudi Arabia' : null,
+                'city' => str_contains(mb_strtolower($detail), 'riyadh') ? 'Riyadh' : null,
+                'started_on' => $startedOn,
+                'ended_on' => $endedOn,
+                'is_current' => $current,
+                'responsibilities' => null,
+                'confidence' => 0.74,
+                'review_status' => 'review_required',
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
     }
 
 
@@ -788,6 +867,15 @@ class BulkCvStructuredParser
         string $text
     ): void {
         $items = [
+            [
+                'pattern' => '/\bCertified\s+Professional\s+in\s+Healthcare\s+Quality\s*\(\s*CPHQ\s*(?:,?\s*USA)?\)/iu',
+                'category' => 'certification',
+                'type' => 'professional_certification',
+                'title' => 'Certified Professional in Healthcare Quality (CPHQ)',
+                'authority' => null,
+                'country' => 'United States',
+                'confidence' => 0.86,
+            ],
             [
                 'pattern' =>
                     '/\bRegistered Nurse\s*\(PHRN\)/iu',
@@ -970,6 +1058,16 @@ class BulkCvStructuredParser
         array $lines
     ): void {
         $keywords = [
+            'quality management' => 'Healthcare Quality Management',
+            'risk management' => 'Healthcare Risk Management',
+            'utilization management' => 'Utilization Management',
+            'clinical auditing' => 'Clinical Auditing',
+            'medical record review' => 'Medical Record Review',
+            'performance improvement' => 'Performance Improvement',
+            'hospital accreditation' => 'Hospital Accreditation',
+            'patient safety' => 'Patient Safety',
+            'iso 9001' => 'ISO 9001 Quality Management Systems',
+            'standard development' => 'Healthcare Standards Development',
             'dialysis services' =>
                 'Hemodialysis',
 
@@ -1487,7 +1585,7 @@ class BulkCvStructuredParser
 
         if (
             ! preg_match(
-                '/^([A-Za-z]+)\s+(\d{4})\s*(?:-|–|up to)\s*(present|([A-Za-z]+)\s+(\d{4}))$/iu',
+                '/^([A-Za-z]+)\s+(\d{4})\s*(?:-|–|to|up to)\s*(present|([A-Za-z]+)\s+(\d{4}))$/iu',
                 trim($value),
                 $match
             )
