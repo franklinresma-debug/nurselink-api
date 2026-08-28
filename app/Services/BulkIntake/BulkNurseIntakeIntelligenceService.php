@@ -1268,7 +1268,20 @@ class BulkNurseIntakeIntelligenceService
         };
         $add = function (array &$fields, string $field, ?string $cell, float $confidence = 0.97): void {
             if ($cell !== null && trim($cell) !== '') {
-                $fields[$field] = ['value' => trim($cell), 'confidence' => $confidence];
+                $limits = [
+                    'first_name' => 160,
+                    'second_name' => 120,
+                    'middle_initial' => 20,
+                    'middle_name' => 160,
+                    'last_name' => 160,
+                    'nationality' => 120,
+                    'current_position' => 190,
+                    'current_employer' => 255,
+                ];
+                $fields[$field] = [
+                    'value' => mb_substr(trim($cell), 0, $limits[$field] ?? 255),
+                    'confidence' => $confidence,
+                ];
             }
         };
 
