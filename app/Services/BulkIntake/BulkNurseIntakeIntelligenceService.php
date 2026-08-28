@@ -161,8 +161,8 @@ class BulkNurseIntakeIntelligenceService
                 'candidate_id',
                 $candidateIds
             )
-            ->orderByDesc('is_current')
-            ->orderByDesc('started_on')
+            ->orderBy('started_on')
+            ->orderBy('id')
             ->orderBy('id')
             ->get()
             ->groupBy('candidate_id');

@@ -45,9 +45,9 @@ class BulkCvStructuredParser
                 'id',
                 $sourceIds
             )
-            ->where(
+            ->whereIn(
                 'document_type',
-                'cv'
+                ['cv', 'employment_certificate']
             )
             ->whereNotIn(
                 'extension',
@@ -789,6 +789,63 @@ class BulkCvStructuredParser
             $fileId,
             $lines
         );
+
+        $this->stageDocumentEmploymentBlocks(
+            $candidateId,
+            $fileId,
+            $lines
+        );
+    }
+
+    /** Recognise role / employer / location / date blocks in CVs and certificates. */
+    private function stageDocumentEmploymentBlocks(int $candidateId, int $fileId, array $lines): void
+    {
+        $datePattern = '/\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\s*(?:-|–|to)\s*(?:present|(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4})\b/iu';
+
+        for ($i = 0, $count = count($lines); $i + 3 < $count; $i++) {
+            $position = trim((string) $lines[$i]);
+            $employer = trim((string) $lines[$i + 1]);
+            $location = trim((string) $lines[$i + 2]);
+            $dateText = trim((string) $lines[$i + 3]);
+
+            if (! preg_match('/\b(?:nurse|supervisor|manager|head)\b/iu', $position)
+                || ! preg_match($datePattern, $dateText, $dateMatch)) {
+                continue;
+            }
+
+            $exists = DB::table('nurselink_bulk_intake_employment')
+                ->where('candidate_id', $candidateId)
+                ->where('source_file_id', $fileId)
+                ->whereRaw('LOWER(position_title) = ?', [mb_strtolower($position)])
+                ->whereRaw('LOWER(employer) = ?', [mb_strtolower($employer)])
+                ->exists();
+            if ($exists) {
+                continue;
+            }
+
+            [$startedOn, $endedOn, $current] = $this->employmentDates($dateMatch[0]);
+            $country = preg_match('/\b(ksa|saudi arabia)\b/iu', $location)
+                ? 'Saudi Arabia'
+                : (preg_match('/\bphilippines?\b/iu', $location) ? 'Philippines' : null);
+
+            DB::table('nurselink_bulk_intake_employment')->insert([
+                'candidate_id' => $candidateId,
+                'source_file_id' => $fileId,
+                'position_title' => mb_substr($position, 0, 190),
+                'employer' => mb_substr($employer, 0, 255),
+                'facility_type' => 'Hospital',
+                'country' => $country,
+                'city' => mb_substr($location, 0, 160),
+                'started_on' => $startedOn,
+                'ended_on' => $endedOn,
+                'is_current' => $current,
+                'responsibilities' => null,
+                'confidence' => 0.88,
+                'review_status' => 'review_required',
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
     }
 
     private function stageGenericCvEmployment(
@@ -1585,6 +1642,21 @@ class BulkCvStructuredParser
                 null,
                 false,
             ];
+        }
+
+        /* Full day-level dates used by many CV work-history blocks. */
+        if (preg_match('/^(.+?)\s*(?:-|–|to)\s*(present|.+)$/iu', trim($value), $fullDates)) {
+            $startTime = strtotime(trim($fullDates[1]));
+            $current = mb_strtolower(trim($fullDates[2])) === 'present';
+            $endTime = $current ? false : strtotime(trim($fullDates[2]));
+
+            if ($startTime !== false && ($current || $endTime !== false)) {
+                return [
+                    date('Y-m-d', $startTime),
+                    $current ? null : date('Y-m-d', $endTime),
+                    $current,
+                ];
+            }
         }
 
         if (
