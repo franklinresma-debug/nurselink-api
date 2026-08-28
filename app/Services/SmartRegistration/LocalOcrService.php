@@ -353,6 +353,17 @@ class LocalOcrService
     private function detectDocumentType(string $text): string
     {
         $value = mb_strtolower($text);
+
+        /*
+         * A CV often mentions professional registration or licence details.
+         * Prefer an explicit heading or a CV filename over those incidental
+         * keywords so CV-specific name and address extraction can run.
+         */
+        if (preg_match('/(?:^|\n)[^\p{L}\n]{0,8}(?:curriculum vitae|resume|résumé)\b/iu', $text)
+            || preg_match('/^\s*cv\.(?:pdf|docx?|png|jpe?g)\b/iu', $text)) {
+            return 'cv';
+        }
+
         if (preg_match('/\b(prc|professional regulation commission|registration no|license no|licence no)\b/u', $value)) {
             return 'prc_license';
         }
