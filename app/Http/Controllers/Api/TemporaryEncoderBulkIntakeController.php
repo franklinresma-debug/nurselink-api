@@ -164,6 +164,22 @@ class TemporaryEncoderBulkIntakeController extends Controller
             ->first();
 
         if ($duplicate) {
+            /*
+             * A roster may be deliberately re-uploaded after its column
+             * mapping changes. Reuse the secured copy rather than storing
+             * a duplicate, then refresh its generated review drafts.
+             */
+            if (in_array(strtolower((string) $duplicate->extension), ['xls', 'xlsx'], true)
+                && DB::table('nurselink_bulk_intake_candidates')->where('batch_id', $batchId)->exists()) {
+                ProcessBulkNurseIntakeFile::dispatch((int) $duplicate->id);
+
+                return response()->json([
+                    'message' => 'The existing spreadsheet is being reprocessed. Its generated candidate drafts will be replaced when processing completes.',
+                    'data' => $duplicate,
+                    'reused_existing_file' => true,
+                ], 202);
+            }
+
             return response()->json([
                 'message' =>
                     'This exact document is already in the batch.',

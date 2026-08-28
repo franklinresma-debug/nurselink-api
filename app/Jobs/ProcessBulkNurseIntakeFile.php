@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Services\Security\ClamAvScanner;
+use App\Services\BulkIntake\BulkNurseIntakeIntelligenceService;
 use App\Services\SmartRegistration\LocalOcrService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -38,7 +39,8 @@ class ProcessBulkNurseIntakeFile implements ShouldQueue
 
     public function handle(
         ClamAvScanner $scanner,
-        LocalOcrService $ocr
+        LocalOcrService $ocr,
+        BulkNurseIntakeIntelligenceService $intelligence
     ): void {
         $file = DB::table('nurselink_bulk_intake_files')
             ->where('id', $this->fileId)
@@ -136,6 +138,17 @@ class ProcessBulkNurseIntakeFile implements ShouldQueue
         $this->refreshBatchCounters(
             (int) $file->batch_id
         );
+
+        /*
+         * Reprocessing a roster replaces only the generated intake drafts;
+         * submitted/imported member records are not touched here.
+         */
+        if (in_array(strtolower((string) $file->extension), ['xls', 'xlsx'], true)
+            && DB::table('nurselink_bulk_intake_candidates')
+                ->where('batch_id', $file->batch_id)
+                ->exists()) {
+            $intelligence->build((int) $file->batch_id);
+        }
     }
 
     public function failed(
