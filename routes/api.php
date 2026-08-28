@@ -944,6 +944,122 @@ Route::middleware([
 });
 /* NURSELINK_TEMPORARY_ENCODER_MANAGEMENT_V590_END */
 
+/* NURSELINK_TEMPORARY_ENCODER_WORKSPACE_V591_START */
+Route::middleware(
+    \App\Http\Middleware\EnsureTemporaryEncoder::class
+)->group(function () {
+    Route::get(
+        '/nurselink/encoder/assignments',
+        [\App\Http\Controllers\Api\TemporaryEncoderController::class, 'assignments']
+    );
+
+    Route::get(
+        '/nurselink/encoder/nurses/{userId}',
+        [\App\Http\Controllers\Api\TemporaryEncoderController::class, 'showNurse']
+    );
+
+    Route::patch(
+        '/nurselink/encoder/nurses/{userId}/personal',
+        [\App\Http\Controllers\Api\TemporaryEncoderController::class, 'updatePersonal']
+    );
+
+    Route::patch(
+        '/nurselink/encoder/nurses/{userId}/professional',
+        [\App\Http\Controllers\Api\TemporaryEncoderController::class, 'updateProfessional']
+    );
+
+    Route::get(
+        '/nurselink/encoder/nurses/{userId}/workflow',
+        [\App\Http\Controllers\Api\TemporaryEncoderWorkflowController::class, 'show']
+    );
+
+    Route::post(
+        '/nurselink/encoder/nurses/{userId}/submit',
+        [\App\Http\Controllers\Api\TemporaryEncoderWorkflowController::class, 'submit']
+    );
+
+    Route::post(
+        '/nurselink/encoder/nurses/{userId}/membership-transition',
+        [\App\Http\Controllers\Api\TemporaryEncoderWorkflowController::class, 'transitionMembership']
+    );
+
+    Route::post(
+        '/nurselink/encoder/nurses/{userId}/standing',
+        [\App\Http\Controllers\Api\TemporaryEncoderWorkflowController::class, 'transitionStanding']
+    );
+
+    Route::patch(
+        '/nurselink/encoder/nurses/{userId}/credentials/{credentialId}',
+        [\App\Http\Controllers\Api\TemporaryEncoderWorkflowController::class, 'reviewCredential']
+    );
+
+    Route::get(
+        '/nurselink/encoder/bulk-intake',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'index']
+    );
+
+    Route::post(
+        '/nurselink/encoder/bulk-intake',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'create']
+    );
+
+    Route::get(
+        '/nurselink/encoder/bulk-intake/{batchId}',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'show']
+    );
+
+    Route::post(
+        '/nurselink/encoder/bulk-intake/{batchId}/files',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'upload']
+    );
+
+    Route::post(
+        '/nurselink/encoder/bulk-intake/{batchId}/group',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'group']
+    );
+
+    Route::get(
+        '/nurselink/encoder/bulk-intake/{batchId}/candidates',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'candidates']
+    );
+
+    Route::patch(
+        '/nurselink/encoder/bulk-intake/{batchId}/candidates/{candidateId}',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'updateCandidate']
+    );
+
+    Route::get(
+        '/nurselink/encoder/bulk-intake/{batchId}/candidates/{candidateId}/photo',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'candidatePhoto']
+    );
+
+    Route::post(
+        '/nurselink/encoder/bulk-intake/{batchId}/candidates/{candidateId}/ready-for-import',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'readyForImport']
+    );
+
+    Route::post(
+        '/nurselink/encoder/bulk-intake/{batchId}/candidates/{candidateId}/records/approve-all',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'approveAllStructuredRecords']
+    );
+
+    Route::post(
+        '/nurselink/encoder/bulk-intake/{batchId}/candidates/{candidateId}/records/{type}',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'createStructuredRecord']
+    );
+
+    Route::patch(
+        '/nurselink/encoder/bulk-intake/{batchId}/candidates/{candidateId}/records/{type}/{recordId}',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'updateStructuredRecord']
+    );
+
+    Route::post(
+        '/nurselink/encoder/bulk-intake/{batchId}/candidates/{candidateId}/records/{type}/{recordId}/review',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'reviewStructuredRecord']
+    );
+});
+/* NURSELINK_TEMPORARY_ENCODER_WORKSPACE_V591_END */
+
 /* NURSELINK_SMART_REGISTRATION_V557_START */
 Route::middleware(['auth:sanctum', 'verified', 'active.user'])->prefix('smart-registration')->group(function () {
     Route::get('/', [\App\Http\Controllers\Api\SmartRegistrationController::class, 'show']);
