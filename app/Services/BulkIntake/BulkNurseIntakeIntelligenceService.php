@@ -1292,7 +1292,11 @@ class BulkNurseIntakeIntelligenceService
             $phone = preg_replace('/[\s()-]+/u', '', $phoneMatch[0]) ?? $phoneMatch[0];
         }
         $add($fields, 'phone', $phone !== null ? mb_substr($phone, 0, 32) : null, 0.98);
-        $add($fields, 'birth_date', $value(['date of birth', 'birth date', 'birthday']), 0.98);
+        $birthDate = $value(['date of birth', 'birth date', 'birthday']);
+        if ($birthDate !== null && is_numeric($birthDate) && (float) $birthDate > 1000) {
+            $birthDate = gmdate('Y-m-d', strtotime('1899-12-30 UTC') + ((int) $birthDate * 86400));
+        }
+        $add($fields, 'birth_date', $birthDate, 0.98);
         $add($fields, 'nationality', $value(['nationality', 'citizenship']), 0.98);
         $add($fields, 'address_line1', $value(['permanent address', 'address']), 0.95);
         $add($fields, 'current_employer', $value(['hospital', 'healthcare facility', 'employer']), 0.90);
