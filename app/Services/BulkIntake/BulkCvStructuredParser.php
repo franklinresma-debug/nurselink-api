@@ -201,6 +201,13 @@ class BulkCvStructuredParser
             ->orderByDesc('is_current')
             ->orderByDesc('started_on')
             ->first();
+        $employmentWithEmployer = DB::table('nurselink_bulk_intake_employment')
+            ->where('candidate_id', $candidateId)
+            ->whereNotNull('employer')
+            ->where('employer', '!=', '')
+            ->orderByDesc('is_current')
+            ->orderByDesc('started_on')
+            ->first();
         $education = DB::table('nurselink_bulk_intake_education')
             ->where('candidate_id', $candidateId)
             ->orderByDesc('completed_on')
@@ -210,8 +217,8 @@ class BulkCvStructuredParser
         if (empty($candidate->current_position) && ! empty($employment?->position_title)) {
             $updates['current_position'] = $employment->position_title;
         }
-        if (empty($candidate->current_employer) && ! empty($employment?->employer)) {
-            $updates['current_employer'] = $employment->employer;
+        if (empty($candidate->current_employer) && ! empty($employmentWithEmployer?->employer)) {
+            $updates['current_employer'] = $employmentWithEmployer->employer;
         }
         if (empty($candidate->highest_nursing_education) && ! empty($education?->qualification)) {
             $updates['highest_nursing_education'] = $education->qualification;
