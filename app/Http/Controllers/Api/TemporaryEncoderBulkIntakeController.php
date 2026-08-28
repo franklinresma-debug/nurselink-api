@@ -484,6 +484,41 @@ class TemporaryEncoderBulkIntakeController extends Controller
         ]);
     }
 
+    public function previewFile(
+        int $batchId,
+        int $fileId
+    ): BinaryFileResponse {
+        $account = $this->encoder();
+        $this->batch($account, $batchId);
+
+        $file = DB::table('nurselink_bulk_intake_files')
+            ->where('id', $fileId)
+            ->where('batch_id', $batchId)
+            ->first();
+
+        abort_unless($file, 404, 'Bulk Intake document not found.');
+
+        abort_unless(
+            Storage::disk('local')->exists($file->storage_path),
+            404,
+            'The stored document is unavailable.'
+        );
+
+        $mime = Storage::disk('local')->mimeType($file->storage_path)
+            ?: $file->mime_type
+            ?: 'application/octet-stream';
+
+        return response()->file(
+            Storage::disk('local')->path($file->storage_path),
+            [
+                'Content-Type' => $mime,
+                'Content-Disposition' => 'inline; filename="document"',
+                'Cache-Control' => 'private, max-age=300',
+                'X-Content-Type-Options' => 'nosniff',
+            ]
+        );
+    }
+
     public function candidates(
         int $batchId,
         \App\Services\BulkIntake\BulkNurseIntakeIntelligenceService $intelligence
