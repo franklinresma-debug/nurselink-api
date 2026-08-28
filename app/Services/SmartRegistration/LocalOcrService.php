@@ -120,7 +120,7 @@ class LocalOcrService
 
     private function extractCvHeadingFields(array &$fields, array $lines): void
     {
-        $heading = array_slice($lines, 0, 18);
+        $heading = array_slice($lines, 0, 120);
 
         if (! isset($fields['first_name']) || ! isset($fields['last_name'])) {
             foreach ($heading as $index => $line) {
@@ -530,6 +530,13 @@ class LocalOcrService
     private function detectDocumentType(string $text): string
     {
         $value = mb_strtolower($text);
+
+        if (
+            preg_match('/\bprofessional summary\b/iu', $text)
+            && preg_match('/\bprofessional experience\b/iu', $text)
+        ) {
+            return 'cv';
+        }
 
         /*
          * A CV often mentions professional registration or licence details.

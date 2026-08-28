@@ -854,8 +854,12 @@ class BulkCvStructuredParser
             $location = trim((string) $lines[$i + 2]);
             $dateText = trim((string) $lines[$i + 3]);
 
-            if (! preg_match('/\b(?:nurse|supervisor|manager|head)\b/iu', $position)
-                || ! preg_match($datePattern, $dateText, $dateMatch)) {
+            if (! preg_match('/\b(?:nurse|supervisor|manager|head|intern)\b/iu', $position)) {
+                continue;
+            }
+
+            $hasDate = preg_match($datePattern, $dateText, $dateMatch) === 1;
+            if (! $hasDate && ! preg_match('/\b(?:hospital|medical cent(?:er|re)|clinic)\b/iu', $employer)) {
                 continue;
             }
 
@@ -869,7 +873,7 @@ class BulkCvStructuredParser
                 continue;
             }
 
-            [$startedOn, $endedOn, $current] = $this->employmentDates($dateMatch[0]);
+            [$startedOn, $endedOn, $current] = $this->employmentDates($hasDate ? $dateMatch[0] : null);
             $country = preg_match('/\b(ksa|saudi arabia)\b/iu', $location)
                 ? 'Saudi Arabia'
                 : (preg_match('/\bphilippines?\b/iu', $location) ? 'Philippines' : null);
