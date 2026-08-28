@@ -1274,7 +1274,11 @@ class BulkNurseIntakeIntelligenceService
 
         $fields = [];
         $add($fields, 'email', $value(['email']), 0.99);
-        $add($fields, 'phone', $value(['mobile', 'phone', 'contact number']), 0.98);
+        $phone = $value(['mobile', 'phone', 'contact number']);
+        if ($phone !== null && preg_match('/\+?\d[\d\s()-]{6,30}/u', $phone, $phoneMatch)) {
+            $phone = preg_replace('/[\s()-]+/u', '', $phoneMatch[0]) ?? $phoneMatch[0];
+        }
+        $add($fields, 'phone', $phone !== null ? mb_substr($phone, 0, 32) : null, 0.98);
         $add($fields, 'birth_date', $value(['date of birth', 'birth date', 'birthday']), 0.98);
         $add($fields, 'nationality', $value(['nationality', 'citizenship']), 0.98);
         $add($fields, 'address_line1', $value(['permanent address', 'address']), 0.95);
