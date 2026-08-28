@@ -149,13 +149,13 @@ class LocalOcrService
     {
         if ($this->commandAvailable('pdftotext')) {
             $output = $this->runCommand(['pdftotext', '-layout', '-enc', 'UTF-8', $path, '-']);
-            if (trim($output) !== '') {
+            if ($this->hasMeaningfulText($output)) {
                 return $output;
             }
         }
         if ($this->commandAvailable('gs')) {
             $output = $this->runCommand(['gs', '-q', '-dSAFER', '-dBATCH', '-dNOPAUSE', '-sDEVICE=txtwrite', '-sOutputFile=-', $path]);
-            if (trim($output) !== '') {
+            if ($this->hasMeaningfulText($output)) {
                 return $output;
             }
         }
@@ -183,6 +183,16 @@ class LocalOcrService
         }
 
         return '';
+    }
+
+    private function hasMeaningfulText(string $text): bool
+    {
+        /*
+         * Image-only PDFs can yield only form-feed/page-break characters
+         * from pdftotext. Those are not usable text and must fall through
+         * to the PDF-to-image OCR path.
+         */
+        return preg_match('/[\p{L}\p{N}]/u', $text) === 1;
     }
 
     private function extractImageText(string $path): string
