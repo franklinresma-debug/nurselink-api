@@ -24,7 +24,9 @@ class LocalOcrService
         };
 
         $text = $this->normalizeText($text);
-        $documentType = $this->detectDocumentType($originalName."\n".mb_substr($text, 0, 12000));
+        $documentType = in_array($extension, ['xls', 'xlsx'], true)
+            ? 'spreadsheet'
+            : $this->detectDocumentType($originalName."\n".mb_substr($text, 0, 12000));
         $fields = $text === '' ? [] : $this->extractFields($text, $documentType);
 
         return [

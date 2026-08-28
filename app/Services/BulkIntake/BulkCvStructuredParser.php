@@ -49,6 +49,10 @@ class BulkCvStructuredParser
                 'document_type',
                 'cv'
             )
+            ->whereNotIn(
+                'extension',
+                ['xls', 'xlsx']
+            )
             ->whereNotNull(
                 'extracted_text'
             )
