@@ -269,12 +269,18 @@ class BulkNurseIntakeIntelligenceService
         $merged = [];
         $confidence = [];
         $sourceFiles = [];
+        $rosterDetails = [];
 
         foreach ($items as $item) {
             $file = $item['file'];
             $fields = $item['fields'];
 
             $sourceFiles[] = (int) $file->id;
+
+            $details = $fields['__roster_details']['value'] ?? [];
+            if (is_array($details)) {
+                $rosterDetails = array_merge($rosterDetails, $details);
+            }
 
             foreach (self::PROFILE_FIELDS as $field) {
                 $candidate = $fields[$field] ?? null;
@@ -494,6 +500,10 @@ class BulkNurseIntakeIntelligenceService
                         | JSON_UNESCAPED_SLASHES
                     )
                     : null,
+
+            'roster_details' => $rosterDetails !== []
+                ? json_encode($rosterDetails, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+                : null,
 
             'source_file_ids' =>
                 json_encode(
@@ -1308,6 +1318,30 @@ class BulkNurseIntakeIntelligenceService
             foreach ($name as $field => $cell) {
                 $add($fields, $field, $cell, 0.96);
             }
+        }
+
+        $detailLabels = [
+            'civil status' => 'Civil status',
+            'country/countries of employment' => 'Employment countries',
+            'hospital / healthcare facility' => 'Healthcare facilities',
+            'position/designation' => 'Position history',
+            'emergency contact - name' => 'Emergency contact',
+            'emergency contact number' => 'Emergency contact number',
+            'work setting' => 'Preferred work settings',
+            'business or entrepreneurship' => 'Business / entrepreneurship interest',
+        ];
+        $details = [];
+        foreach ($detailLabels as $needle => $label) {
+            $detail = $value([$needle]);
+            if ($detail !== null) {
+                $details[$label] = mb_substr($detail, 0, 5000);
+            }
+        }
+        if ($details !== []) {
+            $fields['__roster_details'] = [
+                'value' => $details,
+                'confidence' => 0.98,
+            ];
         }
 
         return $fields;
