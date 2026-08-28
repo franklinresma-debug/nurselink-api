@@ -64,29 +64,27 @@ class BulkNurseIntakeIntelligenceService
                 ->where('batch_id', $batchId)
                 ->delete();
 
-            $groups = [];
+            /*
+             * One intake batch belongs to one new candidate. A CV,
+             * licences, certificates, and supporting documents are merged
+             * into that one review record instead of being split by OCR
+             * identifiers discovered in individual files.
+             */
+            $items = [];
 
             foreach ($files as $file) {
-                $fields = $this->decodeFields(
-                    $file->extracted_fields
-                );
-
-                $key = $this->groupingKey(
-                    $file,
-                    $fields
-                );
-
-                $groups[$key] ??= [];
-                $groups[$key][] = [
+                $items[] = [
                     'file' => $file,
-                    'fields' => $fields,
+                    'fields' => $this->decodeFields(
+                        $file->extracted_fields
+                    ),
                 ];
             }
 
-            foreach ($groups as $key => $items) {
+            if ($items !== []) {
                 $this->createCandidate(
                     $batchId,
-                    $key,
+                    'batch:'.$batchId,
                     $items
                 );
             }

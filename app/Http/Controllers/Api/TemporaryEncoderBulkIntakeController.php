@@ -343,7 +343,7 @@ class TemporaryEncoderBulkIntakeController extends Controller
 
         return response()->json([
             'message' =>
-                'Bulk Nurse Intake candidates built for human review.',
+                'Candidate record built from this batch for human review.',
             'data' =>
                 $result,
         ]);
