@@ -414,6 +414,76 @@ class TemporaryEncoderBulkIntakeController extends Controller
         ]);
     }
 
+    public function reprocessFile(
+        Request $request,
+        int $batchId,
+        int $fileId
+    ): JsonResponse {
+        $account = $this->encoder();
+        $batch = $this->batch($account, $batchId);
+
+        abort_if(
+            in_array($batch->status, ['imported', 'cancelled'], true),
+            422,
+            'This batch is closed.'
+        );
+
+        $submitted = DB::table('nurselink_bulk_intake_candidates')
+            ->where('batch_id', $batchId)
+            ->where('import_status', 'ready_for_admin_import')
+            ->exists();
+
+        abort_if(
+            $submitted,
+            422,
+            'This candidate has already been submitted for Administrator Import and cannot be reprocessed.'
+        );
+
+        $file = DB::table('nurselink_bulk_intake_files')
+            ->where('id', $fileId)
+            ->where('batch_id', $batchId)
+            ->first();
+
+        abort_unless($file, 404, 'Bulk Intake document not found.');
+
+        DB::table('nurselink_bulk_intake_files')
+            ->where('id', $fileId)
+            ->update([
+                'document_type' => null,
+                'security_status' => 'pending',
+                'security_message' => 'Queued for reprocessing.',
+                'security_scanned_at' => null,
+                'extraction_status' => 'queued',
+                'extraction_message' => 'Queued for reprocessing.',
+                'extracted_text' => null,
+                'extracted_fields' => null,
+                'extracted_at' => null,
+                'updated_at' => now(),
+            ]);
+
+        $this->refreshBatchCounters($batchId);
+
+        ProcessBulkNurseIntakeFile::dispatch($fileId);
+
+        $this->audit(
+            $request,
+            $account,
+            $batchId,
+            null,
+            $fileId,
+            'bulk.file_reprocessing_requested',
+            [
+                'original_name' => $file->original_name,
+                'sha256' => $file->sha256,
+            ],
+            null
+        );
+
+        return response()->json([
+            'message' => 'Document reprocessing started. When processing finishes, build the candidate record again to refresh its detected fields.',
+        ]);
+    }
+
     public function candidates(
         int $batchId,
         \App\Services\BulkIntake\BulkNurseIntakeIntelligenceService $intelligence

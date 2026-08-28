@@ -1019,6 +1019,11 @@ Route::middleware(
     );
 
     Route::post(
+        '/nurselink/encoder/bulk-intake/{batchId}/files/{fileId}/reprocess',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'reprocessFile']
+    );
+
+    Route::post(
         '/nurselink/encoder/bulk-intake/{batchId}/group',
         [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'group']
     );
