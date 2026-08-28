@@ -1013,6 +1013,11 @@ Route::middleware(
         [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'upload']
     );
 
+    Route::delete(
+        '/nurselink/encoder/bulk-intake/{batchId}/files/{fileId}',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'destroyFile']
+    );
+
     Route::post(
         '/nurselink/encoder/bulk-intake/{batchId}/group',
         [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'group']

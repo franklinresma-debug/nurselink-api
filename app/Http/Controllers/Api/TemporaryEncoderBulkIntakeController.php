@@ -349,6 +349,71 @@ class TemporaryEncoderBulkIntakeController extends Controller
         ]);
     }
 
+    public function destroyFile(
+        Request $request,
+        int $batchId,
+        int $fileId
+    ): JsonResponse {
+        $account = $this->encoder();
+        $batch = $this->batch($account, $batchId);
+
+        $hasCandidates = DB::table('nurselink_bulk_intake_candidates')
+            ->where('batch_id', $batchId)
+            ->exists();
+
+        abort_if(
+            $hasCandidates || (int) $batch->candidate_count > 0,
+            422,
+            'Documents cannot be removed after nurse candidates have been built. Create a new batch to change its source documents.'
+        );
+
+        $file = DB::table('nurselink_bulk_intake_files')
+            ->where('id', $fileId)
+            ->where('batch_id', $batchId)
+            ->first();
+
+        abort_unless($file, 404, 'Bulk Intake document not found.');
+
+        $auditState = [
+            'original_name' => $file->original_name,
+            'sha256' => $file->sha256,
+            'security_status' => $file->security_status,
+            'extraction_status' => $file->extraction_status,
+        ];
+
+        Storage::disk('local')->delete($file->storage_path);
+
+        DB::transaction(function () use (
+            $request,
+            $account,
+            $batchId,
+            $fileId,
+            $auditState
+        ): void {
+            DB::table('nurselink_bulk_intake_files')
+                ->where('id', $fileId)
+                ->where('batch_id', $batchId)
+                ->delete();
+
+            $this->refreshBatchCounters($batchId);
+
+            $this->audit(
+                $request,
+                $account,
+                $batchId,
+                null,
+                $fileId,
+                'bulk.file_removed',
+                $auditState,
+                null
+            );
+        });
+
+        return response()->json([
+            'message' => 'Document removed from this batch.',
+        ]);
+    }
+
     public function candidates(
         int $batchId,
         \App\Services\BulkIntake\BulkNurseIntakeIntelligenceService $intelligence
@@ -1519,6 +1584,43 @@ class TemporaryEncoderBulkIntakeController extends Controller
         );
 
         return $candidate;
+    }
+
+    private function refreshBatchCounters(int $batchId): void
+    {
+        $files = DB::table('nurselink_bulk_intake_files')
+            ->where('batch_id', $batchId);
+
+        $total = (clone $files)->count();
+
+        $processed = (clone $files)
+            ->whereIn('extraction_status', [
+                'extracted',
+                'needs_input',
+                'blocked',
+                'failed',
+            ])
+            ->count();
+
+        $failed = (clone $files)
+            ->whereIn('extraction_status', ['blocked', 'failed'])
+            ->count();
+
+        $status = $total === 0
+            ? 'draft'
+            : ($processed >= $total ? 'ready_for_grouping' : 'processing');
+
+        DB::table('nurselink_bulk_intake_batches')
+            ->where('id', $batchId)
+            ->update([
+                'file_count' => $total,
+                'processed_count' => $processed,
+                'failed_count' => $failed,
+                'status' => $status,
+                'processing_completed_at' =>
+                    $status === 'ready_for_grouping' ? now() : null,
+                'updated_at' => now(),
+            ]);
     }
 
 
