@@ -10,11 +10,19 @@ return [
             'driver' => 'session',
             'provider' => 'users',
         ],
+        'encoder' => [
+            'driver' => 'session',
+            'provider' => 'temporary_encoders',
+        ],
     ],
     'providers' => [
         'users' => [
             'driver' => 'eloquent',
             'model' => App\Models\User::class,
+        ],
+        'temporary_encoders' => [
+            'driver' => 'eloquent',
+            'model' => App\Models\TemporaryEncoderAccount::class,
         ],
     ],
     'passwords' => [
