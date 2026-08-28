@@ -24,6 +24,7 @@ Route::post('/send-email-link', function (\Illuminate\Http\Request $request) {
     return response()->json(['message' => 'Verification link sent.']);
 })->middleware(['auth:sanctum', 'throttle:6,1']);
 use App\Http\Controllers\Api\Member\Portfolio\MyPortfolioController;
+use App\Http\Controllers\Api\Member\CvMakerController;
 use App\Http\Controllers\Api\Member\Portfolio\EducationController;
 use App\Http\Controllers\Api\Member\Portfolio\EmploymentController;
 use App\Http\Controllers\Api\Member\Portfolio\PortfolioItemController;
@@ -167,6 +168,8 @@ Route::middleware(['auth:sanctum', 'verified', 'active.user'])->group(function (
     Route::middleware('permission:profile.manage.own')->group(function () {
         Route::get('/portfolio/me', [MyPortfolioController::class, 'show']);
         Route::patch('/portfolio/me/summary', [MyPortfolioController::class, 'updateSummary']);
+        Route::get('/cv-maker', [CvMakerController::class, 'show']);
+        Route::patch('/cv-maker', [CvMakerController::class, 'save']);
         Route::post('/portfolio/education', [EducationController::class, 'store']);
         Route::patch('/portfolio/education/{education}', [EducationController::class, 'update']);
         Route::delete('/portfolio/education/{education}', [EducationController::class, 'destroy']);
