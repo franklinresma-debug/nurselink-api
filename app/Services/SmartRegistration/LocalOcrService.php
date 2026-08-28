@@ -140,6 +140,26 @@ class LocalOcrService
             }
         }
 
+        /* NurseLink CV Maker places “Full Name, RN” near the page heading. */
+        if (! isset($fields['first_name']) || ! isset($fields['last_name'])) {
+            foreach ($heading as $nameLine) {
+                $clean = trim(preg_replace('/,\s*(?:R\.?N\.?|RM|LPN|BSN|MSN)\b.*$/iu', '', $nameLine) ?? '');
+                if ($clean === '' || ! preg_match('/^[\p{L} .\'-]{5,120}$/u', $clean)) {
+                    continue;
+                }
+
+                $name = $this->parseCvName($clean);
+                if ($name === []) {
+                    continue;
+                }
+
+                foreach ($name as $field => $value) {
+                    $fields[$field] ??= ['value' => $value, 'confidence' => 0.92];
+                }
+                break;
+            }
+        }
+
         if (! isset($fields['address_line1'])) {
             foreach ($heading as $line) {
                 if (! preg_match('/^\d{1,5}\s+.+|\b(street|st\.|road|rd\.|avenue|ave\.|barangay|village|subdivision)\b/iu', $line)) {

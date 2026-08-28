@@ -295,6 +295,13 @@ class BulkCvStructuredParser
             }
         }
 
+        if (! $institution && preg_match('/Bachelor\s+of\s+Science\s+in\s+Nursing\s*\n\s*([^\n]{3,180})/iu', $text, $institutionMatch)) {
+            $candidateInstitution = trim($institutionMatch[1]);
+            if (! preg_match('/^(?:education|certification|training|skills)\b/iu', $candidateInstitution)) {
+                $institution = mb_substr($candidateInstitution, 0, 255);
+            }
+        }
+
         $startedOn = null;
         $completedOn = null;
 
@@ -987,7 +994,7 @@ class BulkCvStructuredParser
             ],
             [
                 'pattern' =>
-                    '/\b(?:Basic Life Support|BLS)\b/iu',
+                    '/\b(?:Basic (?:Cardiac )?Life Support|BLS|BCLS)\b/iu',
                 'category' =>
                     'certification',
                 'type' =>
@@ -1068,6 +1075,12 @@ class BulkCvStructuredParser
                 'category' => 'training', 'type' => 'training_certificate',
                 'title' => 'Clinical Mentorship Program',
                 'authority' => null, 'country' => null, 'confidence' => 0.80,
+            ],
+            [
+                'pattern' => '/\bIV Therapy Certification\b/iu',
+                'category' => 'certification', 'type' => 'training_certificate',
+                'title' => 'IV Therapy Certification',
+                'authority' => null, 'country' => null, 'confidence' => 0.86,
             ],
         ];
 
@@ -1248,6 +1261,16 @@ class BulkCvStructuredParser
             'head nurse duties' => 'Head Nurse Leadership',
             'mentorship to the new staff' => 'Staff Mentorship',
             'skills application and evaluation' => 'Clinical Skills Evaluation',
+            'patient assessment' => 'Patient Assessment',
+            'care planning' => 'Care Planning',
+            'iv therapy' => 'IV Therapy and Phlebotomy',
+            'phlebotomy' => 'IV Therapy and Phlebotomy',
+            'wound care' => 'Wound Care',
+            'patient education' => 'Patient Education',
+            'electronic health records' => 'Electronic Health Records',
+            'critical thinking' => 'Critical Thinking',
+            'team collaboration' => 'Team Collaboration',
+            'time management' => 'Time Management',
         ];
 
         $seen = [];
@@ -1330,14 +1353,14 @@ class BulkCvStructuredParser
          * written in English. Only explicitly labeled languages
          * should be staged.
          */
-        if (
-            ! preg_match(
-                '/(?:languages?|language proficiency)\s*[:\-]\s*([^\n]+)/iu',
-                $text,
-                $match
-            )
-        ) {
+        if (! preg_match('/(?:languages?|language proficiency)\s*[:\-]?\s*([^\n]+)/iu', $text, $match)) {
             return;
+        }
+
+        /* CV Maker layouts may place the language values on the next line. */
+        if (preg_match('/^(?:languages?|language proficiency)\s*[:\-]?$/iu', trim($match[0]))) {
+            $after = mb_substr($text, (int) strpos($text, $match[0]) + mb_strlen($match[0]));
+            $match[1] = trim((string) (preg_split('/\n/u', $after) ?: [''])[0]);
         }
 
         $values = preg_split(
