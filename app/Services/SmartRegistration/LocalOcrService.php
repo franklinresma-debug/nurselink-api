@@ -322,7 +322,10 @@ class LocalOcrService
                             $value = html_entity_decode(trim(strip_tags($valueMatch[1])), ENT_QUOTES | ENT_XML1, 'UTF-8');
                         }
 
-                        $cells[$column] = trim($value);
+                        /* Cell line breaks belong to the same worksheet row. */
+                        $cells[$column] = trim(
+                            preg_replace('/\s+/u', ' ', $value) ?? $value
+                        );
                     }
 
                     if ($cells !== []) {
