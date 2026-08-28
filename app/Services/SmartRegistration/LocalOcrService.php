@@ -23,7 +23,9 @@ class LocalOcrService
             default => '',
         };
 
-        $text = $this->normalizeText($text);
+        $text = in_array($extension, ['xls', 'xlsx'], true)
+            ? $this->normalizeSpreadsheetText($text)
+            : $this->normalizeText($text);
         $documentType = in_array($extension, ['xls', 'xlsx'], true)
             ? 'spreadsheet'
             : $this->detectDocumentType($originalName."\n".mb_substr($text, 0, 12000));
@@ -465,6 +467,14 @@ class LocalOcrService
     {
         $text = str_replace(["\r\n", "\r", "\0"], ["\n", "\n", ' '], $text);
         $text = preg_replace('/[ \t]+/u', ' ', $text) ?? $text;
+
+        return trim(mb_substr($text, 0, self::MAX_EXTRACTED_TEXT));
+    }
+
+    /** Keep TSV column boundaries intact for row-by-row roster import. */
+    private function normalizeSpreadsheetText(string $text): string
+    {
+        $text = str_replace(["\r\n", "\r", "\0"], ["\n", "\n", ' '], $text);
 
         return trim(mb_substr($text, 0, self::MAX_EXTRACTED_TEXT));
     }
