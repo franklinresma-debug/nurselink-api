@@ -16,6 +16,8 @@ class LocalOcrService
         $text = match ($extension) {
             'docx' => $this->extractDocxText($path),
             'doc' => $this->extractLegacyDocText($path),
+            'xlsx' => $this->extractXlsxText($path),
+            'xls' => $this->extractLegacySpreadsheetText($path),
             'pdf' => $this->extractPdfText($path),
             'jpg', 'jpeg', 'png' => $this->extractImageText($path),
             default => '',
@@ -223,6 +225,7 @@ class LocalOcrService
             'pdf_scan_ocr' => $this->commandAvailable('pdftoppm') && $this->commandAvailable('tesseract'),
             'docx_text' => class_exists(\ZipArchive::class),
             'doc_text' => $this->commandAvailable('antiword') || $this->commandAvailable('catdoc'),
+            'xlsx_text' => class_exists(\ZipArchive::class),
             'extractor' => 'local_ocr',
             'ready' => $this->commandAvailable('tesseract') && $this->commandAvailable('pdftotext'),
         ];
@@ -254,6 +257,95 @@ class LocalOcrService
                 if (trim($output) !== '') {
                     return $output;
                 }
+            }
+        }
+
+        return '';
+    }
+
+    private function extractXlsxText(string $path): string
+    {
+        if (! class_exists(\ZipArchive::class)) {
+            return '';
+        }
+
+        $zip = new \ZipArchive;
+        if ($zip->open($path) !== true) {
+            return '';
+        }
+
+        try {
+            $sharedStrings = [];
+            $sharedXml = $zip->getFromName('xl/sharedStrings.xml') ?: '';
+
+            if ($sharedXml !== '') {
+                preg_match_all('/<si\\b[^>]*>(.*?)<\\/si>/si', $sharedXml, $items);
+                foreach ($items[1] ?? [] as $item) {
+                    $text = preg_replace('/<t\\b[^>]*>/i', '', $item) ?? $item;
+                    $text = preg_replace('/<\\/t>/i', '', $text) ?? $text;
+                    $sharedStrings[] = html_entity_decode(trim(strip_tags($text)), ENT_QUOTES | ENT_XML1, 'UTF-8');
+                }
+            }
+
+            $sheets = [];
+            for ($index = 1; $index <= 50; $index++) {
+                $xml = $zip->getFromName('xl/worksheets/sheet'.$index.'.xml');
+                if ($xml === false) {
+                    continue;
+                }
+
+                $rows = [];
+                preg_match_all('/<row\\b[^>]*>(.*?)<\\/row>/si', $xml, $matches);
+                foreach ($matches[1] ?? [] as $rowXml) {
+                    $cells = [];
+                    preg_match_all('/<c\\b([^>]*)>(.*?)<\\/c>/si', $rowXml, $cellMatches, PREG_SET_ORDER);
+
+                    foreach ($cellMatches as $cell) {
+                        $attributes = $cell[1] ?? '';
+                        $body = $cell[2] ?? '';
+                        $value = '';
+
+                        if (preg_match('/t="s"/i', $attributes) && preg_match('/<v>(.*?)<\\/v>/si', $body, $valueMatch)) {
+                            $value = $sharedStrings[(int) trim($valueMatch[1])] ?? '';
+                        } elseif (preg_match('/t="inlineStr"/i', $attributes)) {
+                            $value = html_entity_decode(trim(strip_tags($body)), ENT_QUOTES | ENT_XML1, 'UTF-8');
+                        } elseif (preg_match('/<v>(.*?)<\\/v>/si', $body, $valueMatch)) {
+                            $value = html_entity_decode(trim(strip_tags($valueMatch[1])), ENT_QUOTES | ENT_XML1, 'UTF-8');
+                        }
+
+                        $cells[] = trim($value);
+                    }
+
+                    $line = trim(implode("\\t", $cells));
+                    if ($line !== '') {
+                        $rows[] = $line;
+                    }
+                }
+
+                if ($rows !== []) {
+                    $sheets[] = 'Worksheet '.$index."\\n".implode("\\n", $rows);
+                }
+            }
+
+            return implode("\\n\\n", $sheets);
+        } finally {
+            $zip->close();
+        }
+    }
+
+    private function extractLegacySpreadsheetText(string $path): string
+    {
+        foreach (['xls2csv', 'ssconvert'] as $command) {
+            if (! $this->commandAvailable($command)) {
+                continue;
+            }
+
+            $output = $command === 'ssconvert'
+                ? $this->runCommand([$command, '--export-type=Gnumeric_stf:stf_csv', $path, 'fd://1'])
+                : $this->runCommand([$command, $path]);
+
+            if (trim($output) !== '') {
+                return $output;
             }
         }
 
@@ -442,7 +534,11 @@ class LocalOcrService
     private function message(string $extension, bool $success): string
     {
         if ($success) {
-            return in_array($extension, ['jpg', 'jpeg', 'png'], true) ? 'OCR completed for the image.' : 'Document text extracted.';
+            return in_array($extension, ['jpg', 'jpeg', 'png'], true)
+                ? 'OCR completed for the image.'
+                : (in_array($extension, ['xlsx', 'xls'], true)
+                    ? 'Excel worksheet text extracted.'
+                    : 'Document text extracted.');
         }
 
         return 'Document saved securely. Automatic extraction could not read it, so NurseLink will request the missing information.';

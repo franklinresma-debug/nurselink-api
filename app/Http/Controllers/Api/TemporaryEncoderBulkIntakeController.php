@@ -145,7 +145,7 @@ class TemporaryEncoderBulkIntakeController extends Controller
                 'required',
                 'file',
                 'max:15360',
-                'mimes:pdf,jpg,jpeg,png,doc,docx',
+                'mimes:pdf,jpg,jpeg,png,doc,docx,xls,xlsx',
             ],
         ]);
 
