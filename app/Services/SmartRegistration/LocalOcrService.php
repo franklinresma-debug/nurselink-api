@@ -331,18 +331,18 @@ class LocalOcrService
                         );
                     }
 
-                    $line = trim(implode("\\t", $cells));
+                    $line = trim(implode("\t", $cells));
                     if ($line !== '') {
                         $rows[] = $line;
                     }
                 }
 
                 if ($rows !== []) {
-                    $sheets[] = 'Worksheet '.$index."\\n".implode("\\n", $rows);
+                    $sheets[] = 'Worksheet '.$index."\n".implode("\n", $rows);
                 }
             }
 
-            return implode("\\n\\n", $sheets);
+            return implode("\n\n", $sheets);
         } finally {
             $zip->close();
         }
