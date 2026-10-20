@@ -199,6 +199,7 @@ def deploy(request, stream):
     ROOT.chmod(0o755)
     with (ROOT / '.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        original_commits = {}
         for name, path in [('api', API), ('web', WEB)]:
             if path.is_symlink() and not path.resolve().is_relative_to(ROOT):
                 raise ValueError('Unexpected application symlink')
@@ -206,6 +207,7 @@ def deploy(request, stream):
             if drift:
                 print(f'BLOCKED: uncommitted {name} source changes:\n{drift}', flush=True)
                 raise RuntimeError('Reconcile live source changes before deploying')
+            original_commits[name] = git(path, 'rev-parse', 'HEAD')
             git(path, 'fetch', '--no-tags', REPOS[name], 'main')
             sha = request['backend' if name == 'api' else 'frontend']
             git(path, 'merge-base', '--is-ancestor', sha, 'FETCH_HEAD')
@@ -257,9 +259,12 @@ def deploy(request, stream):
                 raise ValueError('Incomplete release package')
         chown_tree(stage_api)
         chown_tree(stage_web)
+        for name, path in [('api', API), ('web', WEB)]:
+            if dirty_files(path) or git(path, 'rev-parse', 'HEAD') != original_commits[name]:
+                raise RuntimeError('Live source changed while preparing the release')
         # Do not include application output or configuration in GitHub logs.
         state = {**request, 'previous_paths': {k: str(v) for k,v in old.items()},
-                 'previous_commits': {'api': git(API, 'rev-parse', 'HEAD'), 'web': git(WEB, 'rev-parse', 'HEAD')},
+                 'previous_commits': original_commits,
                  'pending_migrations': pending, 'status': 'prepared', 'database_changed': False}
         manifest = release / 'manifest.json'
         def save():
@@ -267,6 +272,8 @@ def deploy(request, stream):
             manifest.chmod(0o600)
         save()
         active = [s for s in SERVICES if subprocess.run(['systemctl', 'is-active', '--quiet', s]).returncode == 0]
+        state['active_services'] = active
+        save()
         switched = []
         maintenance = False
         try:
@@ -296,24 +303,29 @@ def deploy(request, stream):
             save()
             print('Release successful: ' + request['release'], flush=True)
         except Exception:
-            if not state['database_changed']:
-                for service in active:
-                    run(['systemctl', 'stop', service])
-                for name in reversed(switched):
-                    switch(API if name == 'api' else WEB, old[name], old[name])
-                run(['/usr/bin/php', 'artisan', 'view:clear'], cwd=API, app=True)
-                run(['systemctl', 'reload', 'php8.4-fpm.service'])
-                if maintenance or switched:
-                    run(['/usr/bin/php', 'artisan', 'up'], cwd=API, app=True)
-                for service in active:
-                    run(['systemctl', 'start', service])
-                state['status'] = 'failed_application_restored'
-            else:
-                run(['/usr/bin/php', 'artisan', 'down', '--retry=60'], cwd=API, app=True)
-                for service in active:
-                    run(['systemctl', 'stop', service])
-                state['status'] = 'failed_database_review_required'
-            save()
+            try:
+                if not state['database_changed']:
+                    for service in active:
+                        run(['systemctl', 'stop', service])
+                    for name in reversed(switched):
+                        switch(API if name == 'api' else WEB, old[name], old[name])
+                    run(['/usr/bin/php', 'artisan', 'view:clear'], cwd=API, app=True)
+                    run(['systemctl', 'reload', 'php8.4-fpm.service'])
+                    if maintenance or switched:
+                        run(['/usr/bin/php', 'artisan', 'up'], cwd=API, app=True)
+                    for service in active:
+                        run(['systemctl', 'start', service])
+                    state['status'] = 'failed_application_restored'
+                else:
+                    run(['/usr/bin/php', 'artisan', 'down', '--retry=60'], cwd=API, app=True)
+                    for service in active:
+                        run(['systemctl', 'stop', service])
+                    state['status'] = 'failed_database_review_required'
+            except Exception:
+                state['status'] = 'failed_recovery_requires_review'
+                raise RuntimeError('Recovery needs administrator review of the private manifest and log')
+            finally:
+                save()
             raise
 
 

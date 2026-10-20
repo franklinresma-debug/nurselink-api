@@ -168,7 +168,7 @@ class ReleaseSafeguards(unittest.TestCase):
     def test_pending_migrations_require_opt_in_before_changes(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(gateway,'ROOT',Path(folder)), \
                 patch.object(gateway,'dirty_files',return_value=''), \
-                patch.object(gateway,'git',side_effect=['','','','','database/migrations/2026_01_01_change.php']), \
+                patch.object(gateway,'git',side_effect=['a'*40,'','','b'*40,'','','database/migrations/2026_01_01_change.php']), \
                 patch.object(gateway,'laravel',return_value=[]), patch.object(gateway,'receive') as receive:
             with self.assertRaisesRegex(RuntimeError,'compatibility review'):
                 gateway.deploy(self.request(),io.BytesIO(b'abc'))
