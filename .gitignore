@@ -24,3 +24,5 @@ error_log
 *.sql
 *.sqlite
 *.sqlite3
+__pycache__/
+*.pyc

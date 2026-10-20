@@ -1,0 +1,135 @@
+name: Production release
+run-name: Release API ${{ inputs.backend_sha }} + web ${{ inputs.frontend_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      backend_sha:
+        description: Full 40-character backend commit on main
+        required: true
+        type: string
+      frontend_sha:
+        description: Full 40-character frontend commit on main
+        required: true
+        type: string
+      allow_migrations:
+        description: I reviewed pending migrations as backward-compatible and additive
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+  deployments: read
+
+concurrency:
+  group: nurselink-production
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release and approval gate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      backend: ${{ steps.refs.outputs.backend }}
+      frontend: ${{ steps.refs.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Validate exact main-branch commits and required approval
+        id: refs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKEND_SHA: ${{ inputs.backend_sha }}
+          FRONTEND_SHA: ${{ inputs.frontend_sha }}
+        run: python3 deployment/validate-release.py
+  backend:
+    needs: validate
+    uses: ./.github/workflows/backend-ci.yml
+    with:
+      commit: ${{ needs.validate.outputs.backend }}
+      package: true
+    permissions:
+      contents: read
+  frontend:
+    name: Build exact frontend release
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: franklinresma-debug/lbs-nurselink-web
+          ref: ${{ needs.validate.outputs.frontend }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install, audit and build for production
+        env:
+          VITE_API_URL: https://lbs.amsertech.com/backend
+          VITE_APP_URL: https://lbs.amsertech.com
+          VITE_APP_ENV: production
+        run: |
+          npm ci
+          npm audit --audit-level=high --omit=dev
+          npm run build
+          test -s dist/index.html
+          test -s dist/admin/index.html
+          if grep -RIlE 'http://(127\.0\.0\.1|localhost):(5173|8000)' dist --include='*.js' --include='*.html'; then
+            echo 'Production output contains development URLs.' >&2
+            exit 1
+          fi
+          tar --dereference -czf frontend-dist.tar.gz dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: frontend-dist
+          path: frontend-dist.tar.gz
+          retention-days: 7
+  deploy:
+    name: Approve and deploy production
+    needs: [validate, backend, frontend]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment:
+      name: production
+      url: https://lbs.amsertech.com
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: backend-vendor
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: frontend-dist
+      - name: Deploy the tested pair through the restricted gateway
+        env:
+          DEPLOY_KEY: ${{ secrets.LBS_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.LBS_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ vars.LBS_DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.LBS_DEPLOY_PORT }}
+          BACKEND_SHA: ${{ needs.validate.outputs.backend }}
+          FRONTEND_SHA: ${{ needs.validate.outputs.frontend }}
+          ALLOW_MIGRATIONS: ${{ inputs.allow_migrations }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_KEY" && test -n "$KNOWN_HOSTS" && test -n "$DEPLOY_HOST" && test -n "$DEPLOY_PORT"
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.-]+$ ]] && [[ "$DEPLOY_PORT" =~ ^[0-9]+$ ]]
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/lbs-release"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/lbs-release" "$HOME/.ssh/known_hosts"
+          trap 'rm -f "$HOME/.ssh/lbs-release"' EXIT
+          tar -cf release.tar backend-vendor.tar.gz frontend-dist.tar.gz
+          python3 - <<'PY' > request.json
+          import hashlib, json, os
+          from pathlib import Path
+          p = Path('release.tar')
+          print(json.dumps({'action':'deploy','backend':os.environ['BACKEND_SHA'],'frontend':os.environ['FRONTEND_SHA'],'release':os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT'],'allow_migrations':os.environ['ALLOW_MIGRATIONS']=='true','size':p.stat().st_size,'sha256':hashlib.file_digest(p.open('rb'),'sha256').hexdigest()}))
+          PY
+          { cat request.json; cat release.tar; } | ssh -T -i "$HOME/.ssh/lbs-release" -o BatchMode=yes -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes -o ServerAliveInterval=30 -p "$DEPLOY_PORT" "lbs-release@$DEPLOY_HOST"
+          printf '### Production release\n\nBackend: `%s`\n\nFrontend: `%s`\n\n[Open NurseLink](https://lbs.amsertech.com)\n' "$BACKEND_SHA" "$FRONTEND_SHA" >> "$GITHUB_STEP_SUMMARY"
+

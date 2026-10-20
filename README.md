@@ -49,6 +49,11 @@ database. The repository's default test configuration targets port 3306.
 
 ## Deployment Notes
 
+The coordinated GitHub release workflow and production approval gate are
+documented in [deployment/RELEASING.md](deployment/RELEASING.md). Use that workflow
+for routine releases from local changes through GitHub. The steps below describe
+the older manual recovery process.
+
 1. Back up source, storage-affecting paths, and any affected database tables before edits.
 2. Apply backend changes in /var/www/lbs-nurselink-api.
 3. Run targeted syntax checks or tests for changed PHP files.

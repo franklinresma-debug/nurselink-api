@@ -1,0 +1,98 @@
+name: Backend CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_call:
+    inputs:
+      commit:
+        type: string
+        required: true
+      package:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-only
+          MYSQL_DATABASE: nurselink_test
+          MYSQL_USER: nurselink_test
+          MYSQL_PASSWORD: nurselink_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pci-root-only"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    env:
+      APP_ENV: testing
+      APP_URL: http://localhost
+      FRONTEND_URL: https://lbs.amsertech.com
+      SESSION_DOMAIN: ''
+      SESSION_SECURE_COOKIE: 'false'
+      SANCTUM_STATEFUL_DOMAINS: lbs.amsertech.com
+      NURSELINK_DOCUMENT_EXTRACTOR: manual_review
+      NURSELINK_OCR_QUEUE_ENABLED: 'false'
+      DB_HOST: 127.0.0.1
+      DB_PORT: '3306'
+      DB_DATABASE: nurselink_test
+      DB_USERNAME: nurselink_test
+      DB_PASSWORD: nurselink_test
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.commit || github.sha }}
+          persist-credentials: false
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, intl, pdo_mysql, gd, zip, fileinfo, bcmath
+          coverage: none
+          tools: composer:v2
+      - name: Install OCR test tools
+        run: sudo apt-get update -qq && sudo apt-get install -y tesseract-ocr poppler-utils fonts-dejavu-core
+      - name: Validate dependencies and PHP syntax
+        run: |
+          composer validate --no-check-publish
+          composer install --prefer-dist --no-interaction --no-progress
+          composer audit --locked --no-dev
+          find app bootstrap config database routes tests -type f -name '*.php' -print0 | xargs -0 -n1 php -l
+      - name: Prepare isolated test configuration
+        run: |
+          cp .env.example .env
+          php artisan key:generate --force
+      - name: Test deployment safeguards
+        run: python3 -m unittest discover -s deployment/tests -v
+      - name: Run backend regression tests
+        run: vendor/bin/phpunit --log-junit backend-results.xml
+      - name: Save test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: backend-test-results
+          path: backend-results.xml
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Package production dependencies
+        if: inputs.package
+        run: |
+          composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader
+          tar --dereference -czf backend-vendor.tar.gz vendor
+      - name: Save tested backend dependencies
+        if: inputs.package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: backend-vendor
+          path: backend-vendor.tar.gz
+          retention-days: 7
+
