@@ -35,6 +35,8 @@ Artisan::command('nurselink:make-super-admin {email}', function (string $email) 
 Schedule::command('nurselink:credentials-refresh --queue-due')->dailyAt('01:15')->withoutOverlapping();
 
 Schedule::command('nurselink:communications-dispatch --ingest')->everyFiveMinutes()->withoutOverlapping();
+Schedule::command('nurselink:email-sync --limit=50')->everyFiveMinutes()->withoutOverlapping()
+    ->when(fn () => (bool) app(\App\Services\NurseLinkEmailSettings::class)->values()['sync_enabled']);
 
 Artisan::command('nurselink:analytics-snapshot', function (\App\Services\Analytics\AnalyticsSnapshotService $service) {
     $snapshot = $service->capture();
@@ -162,3 +164,9 @@ Artisan::command('nurselink:integration-check {--deep}', function () {
 })->purpose('Run cross-module NurseLink staging integration checks');
 
 Schedule::command('nurselink:scan-documents --limit=100')->everyFiveMinutes()->withoutOverlapping();
+
+Artisan::command('nurselink:application-delay-alerts',function(\App\Services\ApplicationProgressService $service){$this->info('Application delay alerts: '.$service->alertDelayed());})->purpose('Notify administrators about unfinished inactive applications');
+Schedule::command('nurselink:application-delay-alerts')->everyFiveMinutes()->withoutOverlapping();
+Artisan::command('nurselink:application-progress-backfill',function(\App\Services\ApplicationProgressService $service){$count=0;\App\Models\User::where('status','active')->whereHas('roles',fn($q)=>$q->where('code','applicant'))->chunkById(100,function($users)use($service,&$count){foreach($users as $user){$service->ensure($user,false);$count++;}});$this->info('Applicant registrations indexed: '.$count);})->purpose('Index existing active applicants for administrator visibility');
+
+Schedule::call(fn()=>\Illuminate\Support\Facades\DB::table('nurselink_sync_receipts')->where('created_at','<',now()->subDays(14))->delete())->dailyAt('03:40')->name('nurselink-sync-receipts-prune')->withoutOverlapping();

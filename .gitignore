@@ -12,3 +12,15 @@
 
 .env.save
 error_log
+
+# Local credentials, test output, and historical backup files
+.env.*
+!.env.example
+!.env.*.example
+/.phpunit.cache/
+/.phpunit.result.cache
+*.save
+*.before-*
+*.sql
+*.sqlite
+*.sqlite3

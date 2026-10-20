@@ -8,12 +8,12 @@ if [[ -r "${READINESS_ENV}" ]]; then
   source "${READINESS_ENV}"
 fi
 
-API_ROOT="${NURSELINK_API_ROOT:-/var/www/nurselink-api}"
-BACKUP_ROOT="${NURSELINK_BACKUP_ROOT:-/root/nurselink-automated-backups}"
-MONITOR_UNIT="${NURSELINK_MONITOR_UNIT:-nurselink-monitor.service}"
-MONITOR_TIMER="${NURSELINK_MONITOR_TIMER:-nurselink-monitor.timer}"
+API_ROOT="${NURSELINK_API_ROOT:-/var/www/lbs-nurselink-api}"
+BACKUP_ROOT="${NURSELINK_BACKUP_ROOT:-/root/lbs-nurselink-automated-backups}"
+MONITOR_UNIT="${NURSELINK_MONITOR_UNIT:-lbs-nurselink-monitor.service}"
+MONITOR_TIMER="${NURSELINK_MONITOR_TIMER:-lbs-nurselink-monitor.timer}"
 REQUIRED_SECONDS="${NURSELINK_PILOT_OBSERVATION_SECONDS:-86400}"
-MAIL_DOMAIN="${NURSELINK_MAIL_DOMAIN:-amsertech.com}"
+MAIL_DOMAIN="${NURSELINK_MAIL_DOMAIN:-lbs-nurselink.local}"
 
 POLICY_APPROVED="${NURSELINK_POLICY_APPROVED:-0}"
 SUPPORT_OWNER_CONFIRMED="${NURSELINK_SUPPORT_OWNER_CONFIRMED:-0}"
@@ -28,7 +28,7 @@ blocked() { printf '[BLOCKED] %s\n' "$1"; blockers=$((blockers + 1)); }
 
 printf 'NurseLink NL-013 controlled-pilot readiness\n\n'
 
-readiness="$(curl --fail --silent --show-error --max-time 15 https://api.amsertech.com/api/health/ready 2>/dev/null || true)"
+readiness="$(curl --fail --silent --show-error --max-time 15 http://api.lbs-nurselink.local/api/health/ready 2>/dev/null || true)"
 if grep -Fq '"status":"ok"' <<<"${readiness}" \
   && grep -Fq '"environment":"ultahost-pilot"' <<<"${readiness}"; then
   pass 'Live API readiness is healthy and identifies the UltaHost pilot.'
@@ -36,7 +36,7 @@ else
   fail 'Live API readiness is not healthy or has the wrong environment identity.'
 fi
 
-registration="$(curl --fail --silent --show-error --max-time 15 https://api.amsertech.com/api/registration-status 2>/dev/null || true)"
+registration="$(curl --fail --silent --show-error --max-time 15 http://api.lbs-nurselink.local/api/registration-status 2>/dev/null || true)"
 if grep -Fq '"mode":"pilot"' <<<"${registration}"; then
   pass 'Registration remains restricted to controlled-pilot mode.'
 else

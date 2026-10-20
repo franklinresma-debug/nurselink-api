@@ -39,8 +39,17 @@ class MemberRegistryTest extends TestCase
 
     public function test_approval_creates_member_and_changes_role(): void
     {
+        // Exercise the approval-gated mode; open applicant access disables this action.
+        config(['nurselink.applicant_access_without_approval' => false]);
         $applicant=$this->userWithRole('applicant');
         $officer=$this->userWithRole('membership_officer');
+        \Illuminate\Support\Facades\DB::table('nurselink_admin_role_assignments')->insert([
+            'user_id' => $officer->id,
+            'role_key' => 'membership_administrator',
+            'active' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
         $application=Application::query()->create([
             'application_no'=>'NLA-2026-000001','user_id'=>$applicant->id,'status'=>'under_review','progress_percent'=>100,
             'profile_data'=>['first_name'=>'Maria','last_name'=>'Santos','professional_title'=>'Registered Nurse']

@@ -12,12 +12,18 @@ class SessionBootstrapController extends Controller
     public function show(Request $request): JsonResponse
     {
         $origin = (string) $request->headers->get('Origin', '');
+        $frontend = rtrim((string) config('app.frontend_url'), '/');
 
         abort_unless(
-            hash_equals('https://app.amsertech.com', $origin),
+            $frontend !== '' && hash_equals($frontend, $origin),
             403,
             'NurseLink frontend origin required.'
         );
+
+        if ($request->hasSession()) {
+            $request->session()->invalidate();
+            $request->session()->regenerateToken();
+        }
 
         $configured = (string) config('session.cookie', 'laravel_session');
 
@@ -33,43 +39,27 @@ class SessionBootstrapController extends Controller
             'message' => 'NurseLink client session bootstrap completed.',
         ]);
 
+        // Clear host-only cookies and cookies scoped to this deployment's domain.
+        // Local HTTP installations need non-Secure deletion cookies.
+        $domains = [null];
+        $domain = config('session.domain');
+        if (is_string($domain) && $domain !== '') {
+            $domains[] = $domain;
+        }
+
         foreach ($names as $name) {
-            $httpOnly = $name !== 'XSRF-TOKEN';
-
-            // Expire an old host-only cookie previously set by api.amsertech.com.
-            $response->headers->setCookie(
-                Cookie::create($name)
-                    ->withValue('')
-                    ->withExpires(1)
-                    ->withPath('/')
-                    ->withSecure(true)
-                    ->withHttpOnly($httpOnly)
-                    ->withSameSite(Cookie::SAMESITE_LAX)
-            );
-
-            // Expire a shared cookie from the current deployment model.
-            $response->headers->setCookie(
-                Cookie::create($name)
-                    ->withValue('')
-                    ->withExpires(1)
-                    ->withPath('/')
-                    ->withDomain('.amsertech.com')
-                    ->withSecure(true)
-                    ->withHttpOnly($httpOnly)
-                    ->withSameSite(Cookie::SAMESITE_LAX)
-            );
-
-            // Expire an older explicit API-domain cookie variant.
-            $response->headers->setCookie(
-                Cookie::create($name)
-                    ->withValue('')
-                    ->withExpires(1)
-                    ->withPath('/')
-                    ->withDomain('api.amsertech.com')
-                    ->withSecure(true)
-                    ->withHttpOnly($httpOnly)
-                    ->withSameSite(Cookie::SAMESITE_LAX)
-            );
+            foreach ($domains as $cookieDomain) {
+                $response->headers->setCookie(
+                    Cookie::create($name)
+                        ->withValue('')
+                        ->withExpires(1)
+                        ->withPath('/')
+                        ->withDomain($cookieDomain)
+                        ->withSecure((bool) config('session.secure', $request->isSecure()))
+                        ->withHttpOnly($name !== 'XSRF-TOKEN')
+                        ->withSameSite(Cookie::SAMESITE_LAX)
+                );
+            }
         }
 
         return $response;

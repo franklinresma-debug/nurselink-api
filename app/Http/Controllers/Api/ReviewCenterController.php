@@ -218,6 +218,11 @@ class ReviewCenterController extends Controller
     {
         $this->authorizeReviewer($request);
 
+        // Reuse the protected reviewer endpoint; ordinary application responses stay unchanged.
+        if ($request->query('demo_lineup') === '1') {
+            return $this->demoApplicantLineup();
+        }
+
         $rows = DB::table('nurselink_job_applications as a')
             ->join('nurselink_job_opportunities as j', 'j.id', '=', 'a.job_opportunity_id')
             ->orderByRaw("CASE a.status
@@ -278,6 +283,79 @@ class ReviewCenterController extends Controller
         ]);
     }
 
+    private function demoApplicantLineup(): JsonResponse
+    {
+        $members = DB::table('members as m')
+            ->join('users as u', 'u.id', '=', 'm.user_id')
+            ->join('nurselink_demo_profile_records as d', 'd.member_number', '=', 'm.member_no')
+            ->leftJoin('member_profiles as p', 'p.member_id', '=', 'm.id')
+            ->where('d.record_type', 'dummy_dataset')->where('d.record_key', 'NL-DUMMY-20261003')
+            ->where('d.is_active', 1)->where('u.email', 'like', 'nl-demo-%@example.invalid')
+            ->where('m.member_no', 'like', 'NL-DEMO-%')->orderBy('m.member_no')
+            ->get(['m.id', 'm.user_id', 'm.member_no', 'u.name', 'u.email', 'd.payload',
+                'p.current_position', 'p.years_experience'])
+            ->filter(function ($m) {
+                $marker = json_decode($m->payload, true) ?: [];
+                return preg_match('/^nl-demo-\d{3}@example\.invalid$/D', $m->email)
+                    && preg_match('/^NL-DEMO-\d{3}$/D', $m->member_no)
+                    && ($marker['user_id'] ?? null) === $m->user_id
+                    && ($marker['member_id'] ?? null) === $m->id;
+            })->unique('id')->values();
+
+        $uids = $members->pluck('user_id');
+        $credentials = DB::table('nurselink_credentials_registry')->whereIn('user_id', $uids)->get()->groupBy('user_id');
+        $competencies = DB::table('portfolio_competencies')->whereIn('member_id', $members->pluck('id'))->get()->groupBy('member_id');
+        $profiles = DB::table('nurselink_smart_registration_profiles')->whereIn('user_id', $uids)->get()->keyBy('user_id');
+        $preferences = DB::table('nurselink_career_preferences')->whereIn('user_id', $uids)->get()->keyBy('user_id');
+        $jobs = DB::table('nurselink_job_opportunities')->where('source_authority', 'demo')
+            ->where('source_label', 'NL-DUMMY-20261003')->where('reference_code', 'like', 'NL-DEMO-JOB-%')->get()->keyBy('id');
+        $applications = DB::table('nurselink_job_applications')->whereIn('user_id', $uids)
+            ->whereIn('job_opportunity_id', $jobs->keys())->orderByDesc('submitted_at')->get();
+        $interviews = DB::table('nurselink_interviews')->whereIn('user_id', $uids)
+            ->whereIn('job_application_id', $applications->pluck('id'))->orderByDesc('scheduled_start')->get()->groupBy('user_id');
+        $byUser = $applications->groupBy('user_id');
+
+        return response()->json(['data' => $members->map(function ($m) use ($credentials, $competencies, $profiles, $preferences, $jobs, $byUser, $interviews) {
+            $creds = $credentials->get($m->user_id, collect());
+            $skills = $competencies->get($m->id, collect());
+            $profile = $profiles->get($m->user_id);
+            $specialty = $profile->specialty ?? preg_replace('/\s+Nurse$/i', '', $m->current_position ?? '');
+            $verified = $creds->filter(fn ($c) => $c->verification_status === 'verified'
+                && (!$c->expiry_date || $c->expiry_date >= now()->toDateString()))->count();
+            $verifiedSkills = $skills->where('evidence_state', 'verified')->count();
+            $apps = $byUser->get($m->user_id, collect());
+            $interview = $interviews->get($m->user_id, collect())->first();
+            $rating = null;
+            if ($interview && str_contains($interview->partner_notes ?? '', 'TEST / DUMMY')
+                && preg_match('/Interview Rating:\s*([1-5])\/5\b/', $interview->partner_notes ?? '', $matches)) {
+                $rating = (int) $matches[1];
+            }
+            $action = $verified < $creds->count() || $creds->isEmpty() ? 'Review credential evidence'
+                : ($verifiedSkills < $skills->count() || $skills->isEmpty() ? 'Review competency evidence'
+                : ($apps->isEmpty() ? 'Review demo job fit'
+                : ($interview && $interview->status === 'completed' ? 'Review interview notes' : 'Review interview schedule')));
+            return [
+                'member_id' => $m->id, 'member_no' => $m->member_no, 'name' => $m->name,
+                'specialty' => $specialty ?: null, 'years_experience' => $m->years_experience,
+                'credentials' => ['total' => $creds->count(), 'verified_current' => $verified],
+                'competencies' => ['total' => $skills->count(), 'verified' => $verifiedSkills],
+                'pqf_readiness' => null, 'preferred_employer' => null,
+                'target_countries' => json_decode($preferences->get($m->user_id)->target_countries ?? '[]', true) ?: [],
+                'applications' => $apps->map(function ($a) use ($jobs) { $j = $jobs->get($a->job_opportunity_id); return [
+                    'id' => $a->id, 'status' => $a->status, 'title' => $j->title, 'employer' => $j->employer_name,
+                    'reference_code' => $j->reference_code,
+                ]; })->values(),
+                'specialty_suggestions' => $jobs->where('specialty', $specialty)->map(fn ($j) => [
+                    'title' => $j->title, 'employer' => $j->employer_name, 'reference_code' => $j->reference_code,
+                ])->values(),
+                'interview' => $interview ? ['status' => $interview->status, 'scheduled_start' => $interview->scheduled_start,
+                    'timezone' => $interview->timezone, 'demo_note_rating' => $rating] : null,
+                'recommended_action' => $action,
+            ];
+        })->values(), 'meta' => ['demo_only' => true, 'read_only' => true, 'total' => $members->count(),
+            'notice' => 'TEST / DUMMY — not for actual recruitment or deployment. Ratings are demo notes; specialty suggestions are not eligibility decisions.']]);
+    }
+
     public function reviewJobApplication(Request $request, int $id): JsonResponse
     {
         $this->authorizeReviewer($request);
@@ -335,7 +413,7 @@ class ReviewCenterController extends Controller
                 $after->status === 'declined' ? 'error' : 'info'
             ),
             'Job application status updated',
-            'Your NurseLink application tracker is now ' . str_replace('_', ' ', $after->status) . '.',
+            'Your LBS NurseLink application tracker is now ' . str_replace('_', ' ', $after->status) . '.',
             '/applications'
         );
 
@@ -557,6 +635,13 @@ class ReviewCenterController extends Controller
             'requirements' => ['nullable', 'string', 'max:12000'],
             'apply_url' => ['nullable', 'url', 'max:512'],
             'source_label' => ['nullable', 'string', 'max:190'],
+            'source_authority' => ['nullable', 'string', Rule::in(['dmw', 'nurselink', 'partner', 'other'])],
+            'agency_name' => ['nullable', 'string', 'max:190'],
+            'dmw_job_order_number' => ['nullable', 'string', 'max:120'],
+            'dmw_job_order_url' => ['nullable', 'url', 'max:512'],
+            'dmw_agency_checked_at' => ['nullable', 'date'],
+            'dmw_job_order_checked_at' => ['nullable', 'date'],
+            'source_verification_status' => ['nullable', 'string', Rule::in(['pending_review', 'verified', 'expired', 'unable_to_verify'])],
             'status' => ['required', 'string', Rule::in(['active', 'paused', 'closed'])],
             'published_at' => ['nullable', 'date'],
             'expires_at' => ['nullable', 'date', 'after:published_at'],
@@ -585,6 +670,13 @@ class ReviewCenterController extends Controller
             'requirements' => $row->requirements,
             'apply_url' => $row->apply_url,
             'source_label' => $row->source_label,
+            'source_authority' => $row->source_authority ?? null,
+            'agency_name' => $row->agency_name ?? null,
+            'dmw_job_order_number' => $row->dmw_job_order_number ?? null,
+            'dmw_job_order_url' => $row->dmw_job_order_url ?? null,
+            'dmw_agency_checked_at' => $row->dmw_agency_checked_at ?? null,
+            'dmw_job_order_checked_at' => $row->dmw_job_order_checked_at ?? null,
+            'source_verification_status' => $row->source_verification_status ?? null,
             'verified_by' => $row->verified_by ?? null,
             'verified_at' => $row->verified_at ?? null,
             'status' => $row->status,

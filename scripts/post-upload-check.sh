@@ -3,7 +3,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 API_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 cd "${API_ROOT}"
-printf 'NurseLink API production preflight\n'
+printf 'LBS NurseLink API production preflight\n'
 printf 'Path: %s\n' "$PWD"
 printf 'PHP: '; php -v | head -1
 printf 'Composer: '; composer --version | head -1

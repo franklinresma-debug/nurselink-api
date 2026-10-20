@@ -10,7 +10,7 @@ return [
     'username' => 'email',
     'email' => 'email',
     'lowercase_usernames' => true,
-    'home' => rtrim(env('FRONTEND_URL', 'https://app.amsertech.com'), '/').'/dashboard',
+    'home' => rtrim(env('FRONTEND_URL', 'https://lbs.amsertech.com'), '/').'/dashboard',
     'prefix' => '',
     'domain' => null,
     'views' => false,

@@ -117,7 +117,7 @@ class PartnerPortalController extends Controller
             'description' => $data['description'] ?? null,
             'requirements' => $data['requirements'] ?? null,
             'apply_url' => $data['apply_url'] ?? null,
-            'source_label' => 'NurseLink Partner Portal',
+            'source_label' => 'LBS NurseLink Partner Portal',
             'status' => 'paused',
             'published_at' => null,
             'expires_at' => $data['expires_at'] ?? null,
@@ -132,7 +132,7 @@ class PartnerPortalController extends Controller
         $this->audit($request, $access, 'opportunity.created', 'job_opportunity', (string) $id, null, $after);
 
         return response()->json([
-            'message' => 'Opportunity submitted for NurseLink verification.',
+            'message' => 'Opportunity submitted for LBS NurseLink verification.',
             'data' => $this->presentJob($after),
         ], 201);
     }
@@ -188,7 +188,7 @@ class PartnerPortalController extends Controller
         return response()->json([
             'message' => $newStatus === 'closed'
                 ? 'Opportunity closed.'
-                : 'Changes saved and returned to NurseLink for verification.',
+                : 'Changes saved and returned to LBS NurseLink for verification.',
             'data' => $this->presentJob($after),
         ]);
     }
@@ -235,7 +235,7 @@ class PartnerPortalController extends Controller
         return response()->json([
             'data' => $rows->map(function ($row) use ($candidateMap): array {
                 $candidate = $candidateMap[(string) $row->user_id] ?? [
-                    'name' => 'NurseLink Member',
+                    'name' => 'LBS NurseLink Member',
                     'member_number' => null,
                     'public_profile_url' => null,
                 ];
@@ -330,7 +330,7 @@ class PartnerPortalController extends Controller
                 ? 'success'
                 : ($data['status'] === 'declined' ? 'error' : 'info'),
             'title' => 'Employer application update',
-            'message' => 'A NurseLink partner updated your job application to '
+            'message' => 'A LBS NurseLink partner updated your job application to '
                 . str_replace('_', ' ', $data['status']) . '.',
             'action_url' => '/applications',
             'created_at' => now(),
@@ -371,7 +371,7 @@ class PartnerPortalController extends Controller
             ->where('active', true)
             ->first();
 
-        abort_unless($access, 403, 'NurseLink partner access is required.');
+        abort_unless($access, 403, 'LBS NurseLink partner access is required.');
 
         $organization = DB::table('nurselink_partner_organizations')
             ->where('id', $access->partner_organization_id)
@@ -533,10 +533,10 @@ class PartnerPortalController extends Controller
             $profile = $profiles->get($id);
 
             $map[$id] = [
-                'name' => $name !== '' ? $name : 'NurseLink Member',
+                'name' => $name !== '' ? $name : 'LBS NurseLink Member',
                 'member_number' => $membership->member_number ?? null,
                 'public_profile_url' => $profile
-                    ? 'https://app.amsertech.com/nurselink-public-profile.html?slug='
+                    ? 'https://lbs.amsertech.com/nurselink-public-profile.html?slug='
                         . rawurlencode($profile->slug)
                     : null,
             ];

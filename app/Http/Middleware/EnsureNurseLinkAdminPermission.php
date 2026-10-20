@@ -75,6 +75,7 @@ class EnsureNurseLinkAdminPermission
 
         if (str_contains($path, '/admin/management/me')) return 'portal';
         if (str_contains($path, '/admin/users') || str_contains($path, '/admin/management')) return 'admin_management';
+        if (str_contains($path, '/registration-support')) return 'support';
         if (str_contains($path, '/operations-center/support-cases')) return 'support';
         if (str_contains($path, '/operations-center/communications')) return 'communications';
         if (str_contains($path, '/operations-center/audit-log')) return 'reports';
@@ -97,7 +98,7 @@ class EnsureNurseLinkAdminPermission
     private function scopesForRole(string $role): array
     {
         return match ($role) {
-            'membership_administrator' => ['portal', 'membership', 'reports'],
+            'membership_administrator' => ['portal', 'membership', 'support', 'reports'],
             'verification_officer' => ['portal', 'verification', 'membership', 'reports'],
             'content_administrator' => ['portal', 'content', 'communications'],
             'program_administrator' => ['portal', 'programs', 'training', 'reports'],

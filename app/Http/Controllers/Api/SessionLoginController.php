@@ -16,7 +16,7 @@ class SessionLoginController extends Controller
         $origin = (string) $request->headers->get('Origin', '');
 
         abort_unless(
-            hash_equals('https://app.amsertech.com', $origin),
+            $origin !== '' && hash_equals(rtrim((string) config('app.frontend_url'), '/'), $origin),
             403,
             'NurseLink frontend origin required.'
         );

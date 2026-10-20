@@ -75,24 +75,24 @@ class ProductionReadinessController extends Controller
 
         $sessionDomain = (string) config('session.domain');
         $this->add($checks, 'session_domain', 'Shared NurseLink session domain',
-            in_array($sessionDomain, ['.amsertech.com', 'amsertech.com'], true),
+            in_array($sessionDomain, ['.lbs-nurselink.local', 'lbs-nurselink.local'], true),
             'critical',
-            'Session domain supports app.amsertech.com and api.amsertech.com.');
+            'Session domain supports app.lbs-nurselink.local and api.lbs-nurselink.local.');
 
         $stateful = array_map(
             static fn ($v) => trim((string) $v),
             (array) config('sanctum.stateful', [])
         );
         $this->add($checks, 'sanctum_stateful', 'Sanctum stateful frontend',
-            in_array('app.amsertech.com', $stateful, true), 'critical',
-            'app.amsertech.com is a stateful Sanctum frontend.');
+            in_array('app.lbs-nurselink.local', $stateful, true), 'critical',
+            'app.lbs-nurselink.local is a stateful Sanctum frontend.');
 
         $origins = array_map(
             static fn ($v) => trim((string) $v),
             (array) config('cors.allowed_origins', [])
         );
         $this->add($checks, 'cors_origin', 'CORS frontend origin',
-            in_array('https://app.amsertech.com', $origins, true), 'critical',
+            in_array('https://lbs.amsertech.com', $origins, true), 'critical',
             'CORS explicitly allows the NurseLink frontend origin.');
 
         $this->add($checks, 'cors_credentials', 'CORS credentials support',
@@ -207,16 +207,14 @@ class ProductionReadinessController extends Controller
         foreach ($this->criticalRoutes() as $uri => $severity) {
             $this->add($checks, 'route:' . $uri, 'API route: /' . $uri,
                 in_array($uri, $routeUris, true), $severity,
-                'Required NurseLink API surface is registered.');
+                'Required LBS NurseLink API surface is registered.');
         }
 
         $counts = [
             'active_reviewers' => $this->safeCount(
                 'nurselink_reviewer_access', ['active' => true]),
             'approved_memberships' => $this->safeCount(
-                'nurselink_memberships',
-            'nurselink_membership_onboarding',
-            'nurselink_support_cases', ['status' => 'approved']),
+                'nurselink_memberships', ['status' => 'approved']),
             'verified_partner_organizations' => $this->safeCount(
                 'nurselink_partner_organizations', ['status' => 'verified']),
             'job_opportunities' => $this->safeCount(

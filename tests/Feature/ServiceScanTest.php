@@ -26,6 +26,13 @@ class ServiceScanTest extends TestCase
             'updated_at' => now(),
         ]);
 
+        DB::table('nurselink_super_admin_access')->insert([
+            'user_id' => $user->id,
+            'active' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
         return $user;
     }
 
@@ -54,7 +61,7 @@ class ServiceScanTest extends TestCase
     {
         $staff = $this->staff();
         [, $membershipId] = $this->activeMembership();
-        $url = 'https://app.amsertech.com/nurselink-member-verify.html?code=test-service-scan-verification-code';
+        $url = 'http://app.lbs-nurselink.local/nurselink-member-verify.html?code=test-service-scan-verification-code';
 
         $this->actingAs($staff)
             ->postJson('/api/nurselink/admin/service-scans/resolve', ['value' => $url])

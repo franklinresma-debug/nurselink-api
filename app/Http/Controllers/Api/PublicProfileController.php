@@ -14,7 +14,7 @@ use Symfony\Component\HttpFoundation\BinaryFileResponse;
 class PublicProfileController extends Controller
 {
     private const PHOTO_DISK = 'local';
-    private const FRONTEND_URL = 'https://app.amsertech.com';
+    private const FRONTEND_URL = 'https://lbs.amsertech.com';
 
     public function settings(Request $request): JsonResponse
     {
@@ -259,6 +259,15 @@ class PublicProfileController extends Controller
 
     private function approvedMembership(string $userId): object
     {
+        $access = app(\App\Services\ApplicantPortalAccess::class);
+        $user = \App\Models\User::find($userId);
+        if ($access->eligible($user)) {
+            $access->ownRecord($user);
+            $request = \Illuminate\Http\Request::create('/');
+            $request->setUserResolver(fn() => $user);
+            app(MembershipController::class)->me($request);
+            return DB::table('nurselink_memberships')->where('user_id',$userId)->first();
+        }
         $membership = DB::table('nurselink_memberships')
             ->where('user_id', $userId)
             ->where('status', 'approved')

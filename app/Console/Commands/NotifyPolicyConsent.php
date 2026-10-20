@@ -11,7 +11,7 @@ class NotifyPolicyConsent extends Command
     protected $signature = 'nurselink:notify-policy-consent
         {--send : Create in-app reminders; without this option the command is a dry run}';
 
-    protected $description = 'Remind active users who must personally accept the current NurseLink policies';
+    protected $description = 'Remind active users who must personally accept the current LBS NurseLink policies';
 
     public function handle(): int
     {
@@ -52,7 +52,7 @@ class NotifyPolicyConsent extends Command
                 'user_id' => $user->id,
                 'type' => 'policy_consent_required',
                 'severity' => 'info',
-                'title' => 'Review NurseLink’s current policies',
+                'title' => 'Review LBS NurseLink’s current policies',
                 'message' => 'Please review and personally accept the current Terms of Use and Privacy Notice to keep your consent record up to date.',
                 'action_url' => '/policy-center',
                 'read_at' => null,

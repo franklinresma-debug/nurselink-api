@@ -40,6 +40,19 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
-        //
+        config(['app.name' => 'LBS NurseLink', 'mail.from.name' => 'LBS NurseLink']);
+        \Illuminate\Support\Facades\Event::listen(\Illuminate\Mail\Events\MessageSending::class, function ($event): void {
+            $mail = $event->message;
+            $mail->subject(\App\Services\Communications\NotificationBrand::subject($mail->getSubject()));
+            if ($mail->getTextBody() !== null) {
+                $mail->text(\App\Services\Communications\NotificationBrand::text($mail->getTextBody()));
+            }
+            if ($mail->getHtmlBody() !== null) {
+                $html = preg_replace_callback('/(^|>)([^<]*)(?=<|$)/s', fn ($part) => $part[1] . \App\Services\Communications\NotificationBrand::text($part[2]), $mail->getHtmlBody());
+                $mail->html($html);
+            }
+            $senders = array_map(fn ($address) => new \Symfony\Component\Mime\Address($address->getAddress(), 'LBS NurseLink'), $mail->getFrom());
+            if ($senders) $mail->from(...$senders);
+        });
     }
 }

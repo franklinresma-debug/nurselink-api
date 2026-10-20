@@ -96,6 +96,8 @@ class MembershipLifecycleService
         if (! $copy) return ['in_app' => false, 'email' => 'not_applicable'];
 
         [$severity, $title, $message, $url] = $copy;
+        $title = \App\Services\Communications\NotificationBrand::subject($title);
+        $message = \App\Services\Communications\NotificationBrand::text($message);
         $inApp = false;
 
         if (Schema::hasTable('nurselink_notifications')) {
@@ -309,19 +311,19 @@ class MembershipLifecycleService
             'submitted' => [
                 'info',
                 'Membership application received',
-                'Your NurseLink membership application is in the review queue.',
+                'Your LBS NurseLink membership application is in the review queue.',
                 '/application-status',
             ],
             'resubmitted' => [
                 'info',
                 'Membership application resubmitted',
-                'Your updated Smart Registration has been returned to the NurseLink review queue.',
+                'Your updated Smart Registration has been returned to the LBS NurseLink review queue.',
                 '/application-status',
             ],
             'under_review' => [
                 'info',
                 'Membership review started',
-                'An authorized NurseLink reviewer is reviewing your membership application.',
+                'An authorized LBS NurseLink reviewer is reviewing your membership application.',
                 '/application-status',
             ],
             'needs_information' => [
@@ -338,14 +340,14 @@ class MembershipLifecycleService
             ],
             'approved' => [
                 'success',
-                'NurseLink membership approved',
-                'Congratulations. Your NurseLink membership has been approved. Open the Membership Welcome Center to complete onboarding and activate your member tools.',
+                'LBS NurseLink membership approved',
+                'Congratulations. Your LBS NurseLink membership has been approved. Open the Membership Welcome Center to complete onboarding and activate your member tools.',
                 '/nurselink-membership-welcome.html',
             ],
             'declined' => [
                 'error',
                 'Membership review completed',
-                'Your NurseLink membership application was not approved. Review the decision notes in Application Status.',
+                'Your LBS NurseLink membership application was not approved. Review the decision notes in Application Status.',
                 '/application-status',
             ],
         ][$eventKey] ?? null;

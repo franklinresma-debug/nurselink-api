@@ -750,6 +750,15 @@ class MembershipOnboardingController extends Controller
     private function approvedMembership(
         string $userId
     ): ?object {
+        $access = app(\App\Services\ApplicantPortalAccess::class);
+        $user = \App\Models\User::find($userId);
+        if ($access->eligible($user)) {
+            $access->ownRecord($user);
+            $request = \Illuminate\Http\Request::create('/');
+            $request->setUserResolver(fn() => $user);
+            app(MembershipController::class)->me($request);
+            return DB::table('nurselink_memberships')->where('user_id',$userId)->first();
+        }
         return DB::table(
             'nurselink_memberships'
         )
@@ -866,6 +875,12 @@ class MembershipOnboardingController extends Controller
         string $memberNumber,
         string $standing
     ): array {
+        $coreMemberId = Schema::hasTable('members')
+            ? DB::table('members')
+                ->where('user_id', $userId)
+                ->value('id')
+            : null;
+
         $employmentCount =
             Schema::hasTable(
                 'nurselink_employment_histories'
@@ -879,6 +894,15 @@ class MembershipOnboardingController extends Controller
                     )
                     ->count()
                 : 0;
+
+        if (
+            $coreMemberId
+            && Schema::hasTable('portfolio_employment')
+        ) {
+            $employmentCount += DB::table('portfolio_employment')
+                ->where('member_id', $coreMemberId)
+                ->count();
+        }
 
         $credentialCount =
             Schema::hasTable(
@@ -907,6 +931,16 @@ class MembershipOnboardingController extends Controller
                     )
                     ->count()
                 : 0;
+
+        if (
+            $coreMemberId
+            && Schema::hasTable('portfolio_summaries')
+            && DB::table('portfolio_summaries')
+                ->where('member_id', $coreMemberId)
+                ->exists()
+        ) {
+            $portfolioCount++;
+        }
 
         $careerPreferences =
             Schema::hasTable(

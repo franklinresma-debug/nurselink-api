@@ -12,7 +12,21 @@ use Illuminate\Validation\Rule;
 class AdminMemberRegistryController extends Controller
 {
     private const ELEVATION_TTL_SECONDS = 28800;
-    private const FRONTEND_URL = 'https://app.amsertech.com';
+    private const FRONTEND_URL = 'https://lbs.amsertech.com';
+
+    public function photo(Request $request, int $membershipId)
+    {
+        $this->requireAdmin($request);
+        $member = DB::table('nurselink_memberships')->where('id', $membershipId)->where('status', 'approved')->first();
+        abort_unless($member, 404);
+        $path = DB::table('users')->where('id', $member->user_id)->value('profile_photo_path');
+        $storage = \Illuminate\Support\Facades\Storage::disk('local');
+        abort_unless($path && $storage->exists($path), 404);
+        return response()->file($storage->path($path), [
+            'Content-Type' => $storage->mimeType($path) ?: 'image/jpeg',
+            'Cache-Control' => 'private, max-age=300', 'X-Content-Type-Options' => 'nosniff',
+        ]);
+    }
 
     public function summary(Request $request): JsonResponse
     {
@@ -136,6 +150,7 @@ class AdminMemberRegistryController extends Controller
             ->map(fn ($id) => (string) $id)
             ->all();
 
+        $origins = app(\App\Services\RegistrationOrigin::class)->map($ids);
         $users = $this->userMap($ids);
         $credentials = $this->credentialSummaryMap($ids);
         $employment = $this->countMap(
@@ -149,6 +164,7 @@ class AdminMemberRegistryController extends Controller
         $publicProfiles = $this->publicProfileMap($ids);
 
         $rows = $memberships->map(function ($membership) use (
+            $origins,
             $users,
             $credentials,
             $employment,
@@ -168,10 +184,12 @@ class AdminMemberRegistryController extends Controller
             ];
 
             return [
+                'registration_origin' => $origins[$id],
                 'membership_id' => (int) $membership->id,
                 'user_id' => $id,
                 'name' => $user['name'] ?? $id,
                 'email' => $user['email'] ?? '',
+                'registered_at' => $user['registered_at'] ?? null,
                 'profile_photo_uploaded' =>
                     $user['profile_photo_uploaded'] ?? false,
                 'member_number' => $membership->member_number,
@@ -193,6 +211,7 @@ class AdminMemberRegistryController extends Controller
                     : null,
                 'credentials' => $credential,
                 'employment_records' => (int) ($employment[$id] ?? 0),
+                'imported_employment_records' => count($this->importedRecords($id)['employment'] ?? []),
                 'learning_records' => (int) ($learning[$id] ?? 0),
                 'public_profile' => $public,
             ];
@@ -438,6 +457,8 @@ class AdminMemberRegistryController extends Controller
                         : null,
                 ],
                 'member' => $user,
+                'imported_records' => $this->importedRecords($userId),
+                'imported_documents' => $this->importedDocuments($userId, $membershipId),
                 'public_profile' => $public,
                 'credentials' => $credentials,
                 'employment' => $employment,
@@ -458,6 +479,116 @@ class AdminMemberRegistryController extends Controller
                 ],
             ],
         ]);
+    }
+
+    public function saveCorrection(Request $request, int $membershipId, int $fileId): JsonResponse
+    {
+        $this->requireAdmin($request);
+        $member = DB::table('nurselink_memberships')->where('id', $membershipId)->where('status', 'approved')->first();
+        abort_unless($member, 404);
+        $allowed = collect($this->importedDocuments($member->user_id, $membershipId))->firstWhere('id', $fileId);
+        abort_unless($allowed && $allowed['download_url'], 404);
+        $data = $request->validate(['image' => ['required', 'string', 'max:16000000']]);
+        $bytes = base64_decode($data['image'], true);
+        abort_unless($bytes !== false && strlen($bytes) <= 12000000, 422, 'The corrected image is too large.');
+        $size = @getimagesizefromstring($bytes);
+        abort_unless($size && $size[2] === IMAGETYPE_PNG && $size[0] <= 4000 && $size[1] <= 4000, 422, 'A valid PNG image up to 4000 pixels is required.');
+        $image = @imagecreatefromstring($bytes);
+        abort_unless($image, 422, 'Unable to read the image.');
+        ob_start(); imagepng($image); $clean = ob_get_clean(); imagedestroy($image);
+        $storage = \Illuminate\Support\Facades\Storage::disk('local');
+        $path = 'nurselink-corrected-documents/'.\Illuminate\Support\Str::uuid().'.png';
+        try {
+            $result = DB::transaction(function () use ($request, $member, $fileId, $path, $clean, $storage) {
+                $source = DB::table('nurselink_bulk_intake_files')->where('id', $fileId)->first();
+                $candidates = DB::table('nurselink_bulk_intake_candidates')->where('imported_user_id', $member->user_id)->where('batch_id', $source->batch_id)->lockForUpdate()->get();
+                $candidate = $candidates->first(fn ($c) => in_array($fileId, json_decode($c->source_file_ids ?? '[]', true), false));
+                abort_unless($candidate, 404);
+                abort_unless($storage->put($path, $clean), 500, 'Unable to store corrected image.');
+                $name = pathinfo($source->original_name, PATHINFO_FILENAME).'-corrected-'.now()->format('Ymd-His').'.png';
+                $id = DB::table('nurselink_bulk_intake_files')->insertGetId([
+                    'batch_id'=>$source->batch_id, 'original_name'=>$name, 'storage_path'=>$path,
+                    'mime_type'=>'image/png', 'file_size'=>strlen($clean), 'sha256'=>hash('sha256',$clean),
+                    'extension'=>'png', 'security_status'=>'clean', 'extraction_status'=>'completed',
+                    'extracted_fields'=>json_encode(['_document'=>['derived_from_file_id'=>$fileId,'correction'=>'manual_perspective','saved_by_user_id'=>(string)$request->user()->getKey()]]),
+                    'created_at'=>now(), 'updated_at'=>now(),
+                ]);
+                $ids=json_decode($candidate->source_file_ids ?? '[]',true);$ids[]=$id;
+                DB::table('nurselink_bulk_intake_candidates')->where('id',$candidate->id)->update(['source_file_ids'=>json_encode($ids),'updated_at'=>now()]);
+                DB::table('nurselink_bulk_intake_audit')->insert([
+                    'batch_id'=>$source->batch_id,'candidate_id'=>$candidate->id,'admin_user_id'=>$request->user()->getKey(),
+                    'action'=>'bulk.corrected_document_saved','before_state'=>json_encode(['source_file_id'=>$fileId]),
+                    'after_state'=>json_encode(['corrected_file_id'=>$id]),'created_at'=>now(),
+                ]);
+                return ['id'=>$id,'name'=>$name];
+            });
+        } catch (\Throwable $e) { $storage->delete($path); throw $e; }
+        return response()->json(['message'=>'Corrected copy saved to the member’s documents. Original preserved.','data'=>$result],201);
+    }
+
+    private function importedDocuments(string $userId, int $membershipId): array
+    {
+        $files = [];
+        $candidates = DB::table('nurselink_bulk_intake_candidates')->where('imported_user_id', $userId)->whereNotNull('imported_at')->get();
+        foreach ($candidates as $candidate) {
+            $ids = json_decode($candidate->source_file_ids ?? '[]', true) ?: [];
+            foreach (DB::table('nurselink_bulk_intake_files')->where('batch_id', $candidate->batch_id)->whereIn('id', $ids)->get() as $file) {
+                $files[$file->id] = [
+                    'id' => $file->id, 'name' => $file->original_name,
+                    'download_url' => $file->security_status === 'clean'
+                        ? '/api/nurselink/admin/member-registry/'.$membershipId.'/documents/'.$file->id : null,
+                ];
+            }
+        }
+        return array_values($files);
+    }
+
+    public function document(Request $request, int $membershipId, int $fileId)
+    {
+        $this->requireAdmin($request);
+        $member = DB::table('nurselink_memberships')->where('id', $membershipId)->where('status', 'approved')->first();
+        abort_unless($member, 404);
+        $allowed = collect($this->importedDocuments($member->user_id, $membershipId))->firstWhere('id', $fileId);
+        abort_unless($allowed && $allowed['download_url'], 404);
+        $file = DB::table('nurselink_bulk_intake_files')->where('id', $fileId)->first();
+        $storage = \Illuminate\Support\Facades\Storage::disk('local');
+        abort_unless($file && $storage->exists($file->storage_path), 404);
+        $mime = $storage->mimeType($file->storage_path);
+        if ($request->boolean('preview') && in_array($mime, ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf'], true)) {
+            return response()->file($storage->path($file->storage_path), [
+                'Content-Type' => $mime,
+                'Content-Disposition' => 'inline',
+                'X-Content-Type-Options' => 'nosniff',
+                'Cache-Control' => 'private, no-store',
+            ]);
+        }
+        return $storage->download($file->storage_path, basename($file->original_name));
+    }
+
+    private function importedRecords(string $userId): array
+    {
+        $application = DB::table('applications as a')
+            ->join('nurselink_bulk_intake_candidates as c', 'c.imported_application_id', '=', 'a.id')
+            ->where('a.user_id', $userId)->where('c.imported_user_id', $userId)
+            ->whereNotNull('c.imported_at')->orderByDesc('a.created_at')
+            ->select('a.profile_data')->first();
+        $profile = json_decode($application->profile_data ?? '{}', true);
+        $snapshot = $profile['_bulk_professional_snapshot'] ?? [];
+        $allowed = [
+            'education' => ['institution_name','institution','qualification','degree','field_of_study','country','start_date','end_date','graduation_year','started_on','completed_on'],
+            'employment' => ['employer_name','employer','position','job_title','country','city','start_date','end_date','is_current','department','specialty','duties','position_title','started_on','ended_on','responsibilities','facility_type'],
+            'credentials' => ['title','category','credential_type','issuing_authority','country','issued_on','expires_on','verification_status'],
+            'competencies' => ['name','competency_name','title','category','proficiency_level','description','domain','proficiency'],
+            'languages' => ['language','language_name','proficiency','proficiency_level'],
+        ];
+        $result = [];
+        foreach ($allowed as $type => $fields) {
+            $result[$type] = array_values(array_map(
+                fn ($row) => array_intersect_key($row, array_flip($fields)),
+                array_filter($snapshot[$type] ?? [], 'is_array')
+            ));
+        }
+        return $result;
     }
 
     private function normalizedStanding(object $membership): string
@@ -604,6 +735,7 @@ class AdminMemberRegistryController extends Controller
             'first_name',
             'last_name',
             'profile_photo_path',
+            'created_at',
         ] as $column) {
             if (Schema::hasColumn('users', $column)) {
                 $columns[] = $column;
@@ -633,6 +765,7 @@ class AdminMemberRegistryController extends Controller
                     ? $name
                     : (string) ($row->email ?? $row->id),
                 'email' => (string) ($row->email ?? ''),
+                'registered_at' => isset($row->created_at) ? \Carbon\Carbon::parse($row->created_at, config('app.timezone'))->toIso8601String() : null,
                 'profile_photo_uploaded' =>
                     ! empty($row->profile_photo_path ?? null),
             ];

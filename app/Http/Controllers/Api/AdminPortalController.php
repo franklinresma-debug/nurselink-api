@@ -360,6 +360,13 @@ class AdminPortalController extends Controller
                 ->where('active', true)
                 ->exists();
 
+        $granularSuperAdmin = Schema::hasTable('nurselink_admin_role_assignments')
+            && DB::table('nurselink_admin_role_assignments')
+                ->where('user_id', $userId)
+                ->where('role_key', 'super_administrator')
+                ->where('active', true)
+                ->exists();
+
         $modelRole = strtolower(trim((string) (
             $user->role
             ?? $user->user_role
@@ -378,6 +385,7 @@ class AdminPortalController extends Controller
         $reviewRole = strtolower((string) ($reviewerAccess->role ?? ''));
 
         $isSuperAdmin = $explicitSuperAdmin
+            || $granularSuperAdmin
             || $modelSuperAdmin
             || $reviewRole === 'super_admin';
 

@@ -20,7 +20,7 @@ class AdminManagementController extends Controller
     private const ROLES = [
         'super_administrator' => [
             'label' => 'Super Administrator',
-            'description' => 'Full NurseLink administration, role management and governance.',
+            'description' => 'Full LBS NurseLink administration, role management and governance.',
             'scopes' => ['*'],
         ],
         'membership_administrator' => [
@@ -389,6 +389,11 @@ class AdminManagementController extends Controller
         $userId = (string) $user->getKey();
 
         DB::transaction(function () use ($row, $roles, $userId): void {
+            $locked = DB::table('nurselink_admin_invitations')->where('id', $row->id)->lockForUpdate()->first();
+            abort_unless($locked && $locked->status === 'invitation_sent'
+                && hash_equals((string) $locked->token_hash, (string) $row->token_hash)
+                && (! $locked->expires_at || now()->timestamp <= strtotime($locked->expires_at)),
+                422, 'Administrator invitation is no longer pending or has expired.');
             DB::table('nurselink_admin_invitations')->where('id', $row->id)->update([
                 'status' => 'accepted',
                 'accepted_by_user_id' => $userId,
@@ -418,7 +423,7 @@ class AdminManagementController extends Controller
         ], 'Accepted by the verified invitation recipient.', null, $userEmail, 'invitation');
 
         return response()->json([
-            'message' => 'Administrator invitation accepted. Your NurseLink Administrator access is now active.',
+            'message' => 'Administrator invitation accepted. Your LBS NurseLink Administrator access is now active.',
             'data' => [
                 'status' => 'active',
                 'roles' => $roles,
@@ -498,6 +503,49 @@ class AdminManagementController extends Controller
         ]);
     }
 
+    public function memberCandidates(Request $request): JsonResponse
+    {
+        $this->requireSuperAdmin($this->requireElevatedSession($request));
+        $this->ensureTables();
+        $data = $request->validate(['q' => ['nullable', 'string', 'max:190'], 'limit' => ['nullable', 'integer', 'min:1', 'max:100']]);
+        $query = DB::table('users')->where('status', 'active')->whereNotNull('email_verified_at');
+        $search = trim((string) ($data['q'] ?? ''));
+        if ($search !== '') {
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', '%'.$search.'%')->orWhere('email', 'like', '%'.$search.'%');
+            });
+        }
+        $users = $query->orderBy('email')->limit($data['limit'] ?? 50)->get(['id', 'name', 'email', 'status']);
+        return response()->json(['data' => ['candidates' => $users->map(function ($user) {
+            return ['user_id' => (string) $user->id, 'name' => $user->name, 'email' => $user->email,
+                'status' => $user->status, 'roles' => $this->activeRoles((string) $user->id),
+                'already_administrator' => $this->legacyAccess($user)['privileged']];
+        })]]);
+    }
+
+    public function assignMember(Request $request): JsonResponse
+    {
+        $this->requireSuperAdmin($this->requireElevatedSession($request));
+        $this->ensureTables();
+        $data = $request->validate(['user_id' => ['required', 'uuid']]);
+        return DB::transaction(function () use ($request, $data) {
+            $user = DB::table('users')->where('id', $data['user_id'])->lockForUpdate()->first();
+            abort_unless($user && $user->status === 'active' && $user->email_verified_at, 422,
+                'Select an existing active user with a verified email address.');
+            $response = $this->update($request, (string) $user->id);
+            if ($response->getStatusCode() !== 200) return $response;
+            DB::table('nurselink_admin_invitations')->where('email', $user->email)
+                ->where('status', 'invitation_sent')->update([
+                    'status' => 'active', 'activated_at' => now(), 'updated_at' => now(),
+                ]);
+            $this->audit($request, 'administrator.directly_activated', (string) $user->id, null,
+                ['roles' => $this->activeRoles((string) $user->id), 'status' => 'active'],
+                (string) $request->input('reason'), $request->input('approval_notes'), $user->email);
+            return response()->json(['message' => 'Administrator access activated for '.$user->email.'. The user can sign in to the Administration Panel.',
+                'data' => ['user_id' => (string) $user->id, 'status' => 'active']]);
+        });
+    }
+
     public function update(Request $request, string $userId): JsonResponse
     {
         $access = $this->requireElevatedSession($request);
@@ -514,6 +562,7 @@ class AdminManagementController extends Controller
 
         $user = DB::table('users')->where('id', $userId)->first();
         abort_unless($user, 404, 'Administrator user was not found.');
+        abort_unless($user->status === 'active' && $user->email_verified_at, 422, 'Administrator access requires an active user with a verified email address.');
 
         $roles = array_values(array_unique($data['roles']));
         $currentRoles = $this->activeRoles($userId);
@@ -622,7 +671,7 @@ class AdminManagementController extends Controller
     private function ensureTables(): void
     {
         foreach (['nurselink_admin_profiles', 'nurselink_admin_role_assignments', 'nurselink_admin_invitations', 'nurselink_admin_governance_audit'] as $table) {
-            abort_unless(Schema::hasTable($table), 503, 'NurseLink Administrator Management is not installed completely.');
+            abort_unless(Schema::hasTable($table), 503, 'LBS NurseLink Administrator Management is not installed completely.');
         }
     }
 
@@ -733,7 +782,7 @@ class AdminManagementController extends Controller
             $existing = DB::table('nurselink_super_admin_access')->where('user_id', $userId)->first();
             $values = [
                 'active' => $isSuper,
-                'note' => 'Synchronized by NurseLink Administrator Management v5.5.7',
+                'note' => 'Synchronized by LBS NurseLink Administrator Management v5.5.7',
                 'granted_at' => $isSuper ? now() : ($existing->granted_at ?? null),
                 'revoked_at' => $isSuper ? null : now(),
                 'updated_at' => now(),
@@ -749,23 +798,26 @@ class AdminManagementController extends Controller
     private function newInvitationToken(): array
     {
         $token = Str::random(80);
-        $link = 'https://app.amsertech.com/login?return=' . rawurlencode('/dashboard?admin_invite=' . $token);
+        $link = 'https://lbs.amsertech.com/login?return=' . rawurlencode('/dashboard?admin_invite=' . $token);
         return [$token, $link];
     }
 
     private function sendInvitationEmail(string $email, array $roles, ?string $department, string $link): array
     {
+        if (in_array(config('mail.default'), ['log', 'array'], true)) {
+            return ['manual_link_required', 'Email transport is not configured for delivery.'];
+        }
         $labels = array_map(fn ($role) => self::ROLES[$role]['label'] ?? $role, $roles);
-        $body = "You have been invited to NurseLink Administrator access.\n\n"
+        $body = "You have been invited to LBS NurseLink Administrator access.\n\n"
             . 'Roles: ' . implode(', ', $labels) . "\n"
             . ($department ? 'Department / Unit: ' . $department . "\n" : '')
-            . "\nTo accept, sign in with this exact email address, verify the email if required, then open:\n"
+            . "\nTo accept, open the link below. Sign in with this exact email address, or choose Create account if you have not registered. Verify your email, then accept the invitation:\n"
             . $link
             . "\n\nThis invitation expires in " . self::INVITATION_TTL_DAYS . " days. Access is not activated until the invitation is accepted with a verified email address.";
 
         try {
             Mail::raw($body, function ($message) use ($email): void {
-                $message->to($email)->subject('NurseLink Administrator Invitation');
+                $message->to($email)->subject('LBS NurseLink Administrator Invitation');
             });
             return ['sent', null];
         } catch (Throwable $e) {
@@ -846,7 +898,7 @@ class AdminManagementController extends Controller
             && $expiresAt >= time()
             && (time() - $elevatedAt) <= self::ELEVATION_TTL_SECONDS,
             403,
-            'A separate NurseLink administrator sign-in is required.'
+            'A separate LBS NurseLink administrator sign-in is required.'
         );
 
         $access = $this->legacyAccess($user);
@@ -856,7 +908,7 @@ class AdminManagementController extends Controller
 
     private function requireSuperAdmin(array $access): void
     {
-        abort_unless($access['is_super_admin'], 403, 'Super Administrator access is required to manage NurseLink administrators.');
+        abort_unless($access['is_super_admin'], 403, 'Super Administrator access is required to manage LBS NurseLink administrators.');
     }
 
     private function legacyAccess(object $user): array

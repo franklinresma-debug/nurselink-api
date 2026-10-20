@@ -25,6 +25,9 @@ class SmartRegistrationDocumentProcessor
             throw new RuntimeException('Smart Registration document not found.');
         }
 
+        // A queued job for an old version must not extract superseded evidence.
+        if(isset($document->is_current) && !$document->is_current) return $document;
+
         if (! $this->passesSecurityScan($document)) {
             return DB::table('nurselink_smart_registration_documents')
                 ->where('id', $documentId)
@@ -41,17 +44,34 @@ class SmartRegistrationDocumentProcessor
 
         $result = $this->ocr->extract(
             Storage::disk('local')->path($document->storage_path),
-            $document->original_name
+            $document->original_name,
+            false,
+            function (int $pass, int $completed, array $details) use ($documentId): void {
+                $details['pipeline']=['version'=>1,'pass'=>$pass,'completed_passes'=>$completed,'total_passes'=>3,'status'=>'processing'];
+                $labels=[1=>'Reading document text',2=>'Mapping text to fields',3=>'Checking evidence and field formats'];
+                DB::table('nurselink_smart_registration_documents')->where('id',$documentId)->update([
+                    'extracted_fields'=>json_encode(['_document'=>$details],JSON_INVALID_UTF8_SUBSTITUTE),
+                    'extraction_message'=>'Pass '.$pass.' of 3: '.$labels[$pass].'.',
+                    'updated_at'=>now(),
+                ]);
+            }
         );
+
+        $encodedFields = json_encode(
+            [...$result['fields'], '_structured' => $result['structured_records'] ?? [], '_document' => $result['extraction_details'] ?? []],
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE
+        );
+
+        if ($encodedFields === false) {
+            throw new RuntimeException('Unable to encode extracted Smart Registration fields.');
+        }
 
         DB::table('nurselink_smart_registration_documents')
             ->where('id', $documentId)
             ->update([
                 'document_type' => $result['document_type'],
                 'extraction_status' => $result['status'],
-                'extracted_fields' => $result['fields'] !== []
-                    ? json_encode($result['fields'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
-                    : null,
+                'extracted_fields' => $encodedFields,
                 'extraction_message' => $result['message'],
                 'extracted_at' => now(),
                 'updated_at' => now(),
@@ -60,6 +80,10 @@ class SmartRegistrationDocumentProcessor
         DB::table('nurselink_smart_registration_profiles')
             ->where('user_id', $document->user_id)
             ->update(['last_extracted_at' => now(), 'updated_at' => now()]);
+
+        if ($result['pending'] ?? false) {
+            \App\Jobs\ProcessSmartRegistrationDocument::dispatch($documentId)->onConnection('database')->delay(now()->addSeconds(2));
+        }
 
         return DB::table('nurselink_smart_registration_documents')
             ->where('id', $documentId)

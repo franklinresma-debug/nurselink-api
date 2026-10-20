@@ -9,28 +9,60 @@ use Symfony\Component\Process\Process;
 class LocalOcrService
 {
     private const MAX_EXTRACTED_TEXT = 120000;
+    private array $imageOcrDetails = [];
 
-    public function extract(string $path, string $originalName): array
+    public function extract(string $path, string $originalName, bool $bulkAccuracy = false, ?callable $progress = null): array
     {
+        $progress && $progress(1, 0, []);
+        $this->imageOcrDetails = [];
         $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
-        $text = match ($extension) {
-            'docx' => $this->extractDocxText($path),
-            'doc' => $this->extractLegacyDocText($path),
-            'pdf' => $this->extractPdfText($path),
-            'jpg', 'jpeg', 'png' => $this->extractImageText($path),
-            default => '',
-        };
-
-        $text = $this->normalizeText($text);
-        $documentType = $this->detectDocumentType($originalName."\n".mb_substr($text, 0, 12000));
-        $fields = $text === '' ? [] : $this->extractFields($text, $documentType);
-
-        return [
-            'document_type' => $documentType,
-            'status' => $text === '' ? 'needs_input' : 'extracted',
-            'fields' => $fields,
-            'message' => $this->message($extension, $text !== ''),
-        ];
+        $details = [];
+        if ($extension === 'pdf') {
+            $pdf = app(PdfPageExtractor::class)->extract($path, $progress ? fn(array $meta) => $progress(1, 0, $meta) : null);
+            $pages = $pdf['pages']; $details = $pdf['meta'];
+            $text = implode("\f", array_column($pages, 'text'));
+        } else {
+            $text = match ($extension) {
+                'docx' => $this->extractDocxText($path), 'doc' => $this->extractLegacyDocText($path),
+                'xlsx' => $this->extractXlsxText($path), 'xls' => $this->extractLegacySpreadsheetText($path),
+                'jpg','jpeg','png' => $this->extractImageText($path, $bulkAccuracy && !preg_match('/^(cv|resume|résumé)\./iu', $originalName)), default => '',
+            };
+            $text = in_array($extension,['xls','xlsx'],true) ? $this->normalizeSpreadsheetText($text) : $this->normalizeText($text);
+            $pages = [['page'=>1,'text'=>$text,'method'=>in_array($extension,['jpg','jpeg','png'],true) ? 'ocr' : 'text']];
+            $details = $this->imageOcrDetails;
+            if (isset($details['ocr_quality'])) $pages[0]['ocr_quality']=$details['ocr_quality'];
+        }
+        if ($extension !== 'pdf') {
+            $details += ['total_pages'=>1,'processed_pages'=>1,'complete'=>true,'pages'=>[['page'=>1,'status'=>trim($text)===''?'unreadable':'readable','ocr_quality'=>$details['ocr_quality']??null]]];
+        }
+        $allPagesDone = ($details['complete'] ?? false) === true;
+        $allPagesDone && $progress && $progress(2, 1, $details);
+        $type = in_array($extension,['xls','xlsx'],true) ? 'spreadsheet' : $this->detectDocumentType($originalName."\n".$text);
+        if ($type !== 'spreadsheet' && preg_match('/\b(work experience|work history(?:\s*&\s*experience)?|employment history|professional experience)\b/iu',$text)
+            && preg_match('/\b(education|references|languages|personal details|personal data|personal information)\b/iu',$text)) $type='cv';
+        $parsed = $type === 'spreadsheet' ? ['fields'=>[], 'records'=>[]] : app(DocumentPacketParser::class)->parse($pages,$type);
+        $details['document_segments']=$parsed['segments']??[];
+        $fields = $parsed['fields']; // One normalization/provenance path for CVs, IDs and certificates.
+        app(AccurateImageOcrService::class)->annotate($fields,$parsed['records'],$pages);
+        // LBS_GRADUATION_LABELS_20261003_V1: section-aware graduation evidence is authoritative.
+        // The legacy whole-document regex must not turn expected graduation into completed study.
+        if ($type !== 'spreadsheet' && !isset($parsed['fields']['graduation_year'])) unset($fields['graduation_year']);
+        $allPagesDone && $progress && $progress(3, 2, $details);
+        $validation = app(OcrResultValidator::class)->validate($fields, $parsed['records'], $pages);
+        $details['validation'] = $validation;
+        $details['pipeline'] = ['version'=>1,'pass'=>$allPagesDone?3:1,'completed_passes'=>$allPagesDone?3:0,'total_passes'=>3,'status'=>$allPagesDone?'complete':'waiting_for_pages'];
+        $pending = !empty($details['pending_pages']);
+        $status = $pending ? 'processing' : (trim($text)==='' || ($type!=='spreadsheet' && $fields===[] && !array_filter($parsed['records'])) || !empty($details['unreadable_pages']) ? 'needs_input' : 'extracted');
+        $message = $this->message($extension,trim($text)!=='');
+        if ($extension === 'pdf') {
+            $message = ($details['total_pages'] ?? null) !== null
+                ? $details['processed_pages'].' of '.$details['total_pages'].' pages processed. '.($pending ? 'Remaining scanned pages will continue automatically. ' : 'Review detected information before saving. ')
+                : 'Unable to inspect this PDF. ';
+            $message .= $details['warning'] ?? '';
+        }
+        return ['document_type'=>$type,'status'=>$status,'text'=>$text,'fields'=>$fields,
+            'structured_records'=>$parsed['records'],'extraction_details'=>$details,
+            'pending'=>$pending,'message'=>trim($message)];
     }
 
     public function extractFields(string $text, string $documentType = 'other'): array
@@ -41,6 +73,12 @@ class LocalOcrService
 
         $this->addRegexField($fields, 'email', $compact, '/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/iu', 0.94);
         $this->addRegexField($fields, 'phone', $compact, '/(?<!\d)(?:\+?63|0)?9\d{9}(?!\d)/u', 0.88);
+        if (! isset($fields['phone']) && preg_match('/\+\d{1,3}[\s-]?\d[\d\s-]{6,16}(?!\d)/u', $compact, $phone)) {
+            $fields['phone'] = [
+                'value' => trim(preg_replace('/\s+/u', ' ', $phone[0]) ?? $phone[0]),
+                'confidence' => 0.90,
+            ];
+        }
 
         $patterns = [
             'first_name' => ['first name'],
@@ -77,6 +115,10 @@ class LocalOcrService
             ];
         }
 
+        if ($documentType === 'cv') {
+            $this->extractCvHeadingFields($fields, $lines);
+        }
+
         if (! isset($fields['professional_title']) && preg_match('/\b(registered nurse|staff nurse|charge nurse|head nurse|nurse manager|clinical nurse|nursing officer|nurse educator|nurse practitioner)\b/iu', $compact, $match)) {
             $fields['professional_title'] = ['value' => ucwords(mb_strtolower($match[1])), 'confidence' => $documentType === 'cv' ? 0.86 : 0.72];
         }
@@ -100,6 +142,154 @@ class LocalOcrService
         return array_filter($fields, fn (array $candidate): bool => ($candidate['value'] ?? null) !== null && $candidate['value'] !== '');
     }
 
+    private function extractCvHeadingFields(array &$fields, array $lines): void
+    {
+        $heading = array_slice($lines, 0, 120);
+
+        if (! isset($fields['first_name']) || ! isset($fields['last_name'])) {
+            foreach ($heading as $index => $line) {
+                if (! preg_match('/\b(curriculum vitae|resume|résumé)\b/iu', $line)) {
+                    continue;
+                }
+
+                foreach (array_slice($heading, $index + 1, 4) as $nameLine) {
+                    $name = $this->parseCvName($nameLine);
+                    if ($name === []) {
+                        continue;
+                    }
+
+                    foreach ($name as $field => $value) {
+                        $fields[$field] ??= [
+                            'value' => $value,
+                            'confidence' => 0.76,
+                        ];
+                    }
+
+                    break 2;
+                }
+            }
+        }
+
+        if (! isset($fields['first_name']) || ! isset($fields['last_name'])) {
+            for ($index = 0; $index + 1 < count($heading); $index++) {
+                $combined = trim($heading[$index].' '.$heading[$index + 1]);
+                $combined = trim(preg_replace('/,\s*(?:R\.?N\.?|RM|LPN|BSN|MSN)\b.*$/iu', '', $combined) ?? '');
+                $name = $this->parseCvName($combined);
+                if ($name === []) {
+                    continue;
+                }
+                foreach ($name as $field => $value) {
+                    $fields[$field] ??= ['value' => $value, 'confidence' => 0.90];
+                }
+                break;
+            }
+        }
+
+        if (! isset($fields['country']) && preg_match('/\bSingapore\b/iu', implode("\n", $heading))) {
+            $fields['country'] = ['value' => 'Singapore', 'confidence' => 0.82];
+        }
+
+        /* NurseLink CV Maker places “Full Name, RN” near the page heading. */
+        if (! isset($fields['first_name']) || ! isset($fields['last_name'])) {
+            foreach ($heading as $nameLine) {
+                $clean = trim(preg_replace('/,\s*(?:R\.?N\.?|RM|LPN|BSN|MSN)\b.*$/iu', '', $nameLine) ?? '');
+                if ($clean === '' || ! preg_match('/^[\p{L} .\'-]{5,120}$/u', $clean)) {
+                    continue;
+                }
+
+                $name = $this->parseCvName($clean);
+                if ($name === []) {
+                    continue;
+                }
+
+                foreach ($name as $field => $value) {
+                    $fields[$field] ??= ['value' => $value, 'confidence' => 0.92];
+                }
+                break;
+            }
+        }
+
+        if (! isset($fields['address_line1'])) {
+            foreach ($heading as $line) {
+                if (! preg_match('/^\d{1,5}\s+.+|\b(street|st\.|road|rd\.|avenue|ave\.|barangay|village|subdivision)\b/iu', $line)) {
+                    continue;
+                }
+
+                $fields['address_line1'] = [
+                    'value' => mb_substr($line, 0, 255),
+                    'confidence' => 0.72,
+                ];
+
+                if (! isset($fields['city']) && preg_match('/\b([\p{L}-]+\s+city)\b/iu', $line, $city)) {
+                    $fields['city'] = [
+                        'value' => $city[1],
+                        'confidence' => 0.74,
+                    ];
+                }
+
+                if (! isset($fields['country']) && preg_match('/\b(philippines|phil\.)\b/iu', $line)) {
+                    $fields['country'] = [
+                        'value' => 'Philippines',
+                        'confidence' => 0.84,
+                    ];
+                }
+
+                break;
+            }
+        }
+
+        if (! isset($fields['current_position'])) {
+            foreach ($lines as $line) {
+                if (preg_match('/^(.{3,100}?):.{0,100}\b(?:present|current)\b/iu', $line, $match)) {
+                    $fields['current_position'] = [
+                        'value' => trim($match[1]),
+                        'confidence' => 0.70,
+                    ];
+
+                    break;
+                }
+            }
+        }
+    }
+
+    private function parseCvName(string $line): array
+    {
+        $clean = trim(preg_replace('/\([^)]*\)/u', '', $line) ?? '');
+        $clean = preg_replace('/^[^\p{L}]+/u', '', $clean) ?? $clean;
+
+        if (! preg_match('/^[\p{L} .\'-]{5,120}$/u', $clean)) {
+            return [];
+        }
+
+        $parts = array_values(array_filter(
+            preg_split('/\s+/u', $clean) ?: [],
+            fn (string $part): bool => preg_match('/^[\p{L}.\'-]+$/u', $part) === 1
+        ));
+
+        if (count($parts) < 2 || count($parts) > 6) {
+            return [];
+        }
+
+        $last = array_pop($parts);
+        $first = $parts[0];
+
+        if (mb_strtolower($first) === 'ma.' && count($parts) > 1) {
+            $first .= ' '.$parts[1];
+            array_splice($parts, 1, 1);
+        }
+
+        $result = [
+            'first_name' => $first,
+            'last_name' => $last,
+        ];
+
+        if (count($parts) > 1) {
+            $result['middle_name'] = implode(' ', array_slice($parts, 1));
+        }
+
+        return $result;
+    }
+
     public function capabilities(): array
     {
         return [
@@ -108,6 +298,7 @@ class LocalOcrService
             'pdf_scan_ocr' => $this->commandAvailable('pdftoppm') && $this->commandAvailable('tesseract'),
             'docx_text' => class_exists(\ZipArchive::class),
             'doc_text' => $this->commandAvailable('antiword') || $this->commandAvailable('catdoc'),
+            'xlsx_text' => class_exists(\ZipArchive::class),
             'extractor' => 'local_ocr',
             'ready' => $this->commandAvailable('tesseract') && $this->commandAvailable('pdftotext'),
         ];
@@ -145,17 +336,132 @@ class LocalOcrService
         return '';
     }
 
+    private function extractXlsxText(string $path): string
+    {
+        if (! class_exists(\ZipArchive::class)) {
+            return '';
+        }
+
+        $zip = new \ZipArchive;
+        if ($zip->open($path) !== true) {
+            return '';
+        }
+
+        try {
+            $sharedStrings = [];
+            $sharedXml = $zip->getFromName('xl/sharedStrings.xml') ?: '';
+
+            if ($sharedXml !== '') {
+                preg_match_all('/<si\\b[^>]*>(.*?)<\\/si>/si', $sharedXml, $items);
+                foreach ($items[1] ?? [] as $item) {
+                    $text = preg_replace('/<t\\b[^>]*>/i', '', $item) ?? $item;
+                    $text = preg_replace('/<\\/t>/i', '', $text) ?? $text;
+                    $sharedStrings[] = html_entity_decode(trim(strip_tags($text)), ENT_QUOTES | ENT_XML1, 'UTF-8');
+                }
+            }
+
+            $sheets = [];
+            for ($index = 1; $index <= 50; $index++) {
+                $xml = $zip->getFromName('xl/worksheets/sheet'.$index.'.xml');
+                if ($xml === false) {
+                    continue;
+                }
+
+                $rows = [];
+                preg_match_all('/<row\\b[^>]*>(.*?)<\\/row>/si', $xml, $matches);
+                foreach ($matches[1] ?? [] as $rowXml) {
+                    $cells = [];
+                    preg_match_all('/<c\\b([^>]*)>(.*?)<\\/c>/si', $rowXml, $cellMatches, PREG_SET_ORDER);
+
+                    foreach ($cellMatches as $cellIndex => $cell) {
+                        $attributes = $cell[1] ?? '';
+                        $body = $cell[2] ?? '';
+                        $value = '';
+                        $column = $cellIndex;
+
+                        if (preg_match('/\br="([A-Z]+)\d+"/i', $attributes, $reference)) {
+                            $column = $this->xlsxColumnIndex($reference[1]);
+                        }
+
+                        if (preg_match('/t="s"/i', $attributes) && preg_match('/<v>(.*?)<\\/v>/si', $body, $valueMatch)) {
+                            $value = $sharedStrings[(int) trim($valueMatch[1])] ?? '';
+                        } elseif (preg_match('/t="inlineStr"/i', $attributes)) {
+                            $value = html_entity_decode(trim(strip_tags($body)), ENT_QUOTES | ENT_XML1, 'UTF-8');
+                        } elseif (preg_match('/<v>(.*?)<\\/v>/si', $body, $valueMatch)) {
+                            $value = html_entity_decode(trim(strip_tags($valueMatch[1])), ENT_QUOTES | ENT_XML1, 'UTF-8');
+                        }
+
+                        /* Cell line breaks belong to the same worksheet row. */
+                        $cells[$column] = trim(
+                            preg_replace('/\s+/u', ' ', $value) ?? $value
+                        );
+                    }
+
+                    if ($cells !== []) {
+                        ksort($cells);
+                        $cells = array_map(
+                            fn (int $index): string => $cells[$index] ?? '',
+                            range(0, max(array_keys($cells)))
+                        );
+                    }
+
+                    $line = trim(implode("\t", $cells));
+                    if ($line !== '') {
+                        $rows[] = $line;
+                    }
+                }
+
+                if ($rows !== []) {
+                    $sheets[] = 'Worksheet '.$index."\n".implode("\n", $rows);
+                }
+            }
+
+            return implode("\n\n", $sheets);
+        } finally {
+            $zip->close();
+        }
+    }
+
+    private function extractLegacySpreadsheetText(string $path): string
+    {
+        foreach (['xls2csv', 'ssconvert'] as $command) {
+            if (! $this->commandAvailable($command)) {
+                continue;
+            }
+
+            $output = $command === 'ssconvert'
+                ? $this->runCommand([$command, '--export-type=Gnumeric_stf:stf_csv', $path, 'fd://1'])
+                : $this->runCommand([$command, $path]);
+
+            if (trim($output) !== '') {
+                return $output;
+            }
+        }
+
+        return '';
+    }
+
+    private function xlsxColumnIndex(string $column): int
+    {
+        $index = 0;
+        foreach (str_split(strtoupper($column)) as $letter) {
+            $index = ($index * 26) + (ord($letter) - 64);
+        }
+
+        return max(0, $index - 1);
+    }
+
     private function extractPdfText(string $path): string
     {
         if ($this->commandAvailable('pdftotext')) {
             $output = $this->runCommand(['pdftotext', '-layout', '-enc', 'UTF-8', $path, '-']);
-            if (trim($output) !== '') {
+            if ($this->hasMeaningfulText($output)) {
                 return $output;
             }
         }
         if ($this->commandAvailable('gs')) {
             $output = $this->runCommand(['gs', '-q', '-dSAFER', '-dBATCH', '-dNOPAUSE', '-sDEVICE=txtwrite', '-sOutputFile=-', $path]);
-            if (trim($output) !== '') {
+            if ($this->hasMeaningfulText($output)) {
                 return $output;
             }
         }
@@ -185,19 +491,104 @@ class LocalOcrService
         return '';
     }
 
-    private function extractImageText(string $path): string
+    private function hasMeaningfulText(string $text): bool
     {
-        return $this->commandAvailable('tesseract')
+        /*
+         * Image-only PDFs can yield only form-feed/page-break characters
+         * from pdftotext. Those are not usable text and must fall through
+         * to the PDF-to-image OCR path.
+         */
+        return preg_match('/[\p{L}\p{N}]/u', $text) === 1;
+    }
+
+    private function extractImageText(string $path, bool $bulkAccuracy = false): string
+    {
+        $accurate=app(AccurateImageOcrService::class)->extract($path);
+        if ($accurate!==[]) {
+            $this->imageOcrDetails=['ocr_method'=>'local-accuracy-pipeline','ocr_quality'=>$accurate['quality']];
+            return $accurate['text'];
+        }
+        $this->imageOcrDetails=['ocr_method'=>'legacy-fallback','ocr_quality'=>['version'=>AccurateImageOcrService::VERSION,'review_required'=>true,'fallback'=>true]];
+        if ($bulkAccuracy) {
+            try {
+                $process = new Process([base_path('.venv-ocr/bin/python'), base_path('scripts/bulk_image_ocr.py'), $path]);
+                $process->setWorkingDirectory(base_path());
+                $process->setTimeout(55);
+                $process->run();
+                $result = json_decode(trim($process->getOutput()), true);
+                if ($process->isSuccessful() && !empty($result['ok']) && ($result['mean_confidence'] ?? 0) >= 45 && !empty($result['text'])) {
+                    $this->imageOcrDetails = ['ocr_method'=>'orientation-and-layout-comparison', 'rotation'=>$result['rotation'],
+                        'psm'=>$result['psm'], 'mean_word_confidence'=>$result['mean_confidence'],
+                        'alternatives'=>$result['variants'], 'review_required'=>true,'ocr_quality'=>['version'=>AccurateImageOcrService::VERSION,'review_required'=>true,'fallback'=>true]];
+                    return $result['text'];
+                }
+            } catch (\Throwable $error) {
+                // Keep the established OCR fallback if the bounded comparison is unavailable.
+            }
+        }
+        $text = $this->commandAvailable('tesseract')
             ? $this->runCommand([
                 'tesseract',
                 $path,
                 'stdout',
                 '--psm',
-                '6',
+                '1',
+                '-c',
+                'preserve_interword_spaces=1',
                 '-l',
                 (string) config('smart_registration.ocr.language', 'eng'),
             ])
             : '';
+
+        if ($this->shouldUsePaddleFallback($text)) {
+            $paddle = $this->extractImageTextWithPaddle($path);
+            if ($this->hasMeaningfulText($paddle) && mb_strlen(trim($paddle)) > mb_strlen(trim($text))) {
+                return $paddle;
+            }
+        }
+
+        return $text;
+    }
+
+    private function shouldUsePaddleFallback(string $text): bool
+    {
+        if (! (bool) config('smart_registration.ocr.paddle_fallback', false)) {
+            return false;
+        }
+
+        $minimum = max(20, (int) config('smart_registration.ocr.paddle_min_chars', 80));
+
+        return ! $this->hasMeaningfulText($text) || mb_strlen(trim($text)) < $minimum;
+    }
+
+    private function extractImageTextWithPaddle(string $path): string
+    {
+        $python = (string) config('smart_registration.ocr.paddle_python', base_path('.venv-ocr/bin/python'));
+        $script = (string) config('smart_registration.ocr.paddle_script', base_path('scripts/paddle_ocr.py'));
+
+        if (! is_file($python) || ! is_executable($python) || ! is_file($script)) {
+            return '';
+        }
+
+        try {
+            $process = new Process([$python, $script, $path]);
+            $process->setTimeout(max(10, (int) config('smart_registration.ocr.paddle_timeout', 40)));
+            $process->setIdleTimeout(null);
+            $process->run();
+
+            if (! $process->isSuccessful()) {
+                return '';
+            }
+
+            $lines = preg_split('/\\R/u', trim($process->getOutput())) ?: [];
+            $payload = json_decode((string) end($lines), true);
+
+            return is_array($payload) && ($payload['ok'] ?? false)
+                ? trim((string) ($payload['text'] ?? ''))
+                : '';
+        } catch (\Throwable) {
+            return '';
+        }
     }
 
     private function runCommand(array $command): string
@@ -222,7 +613,15 @@ class LocalOcrService
     private function normalizeText(string $text): string
     {
         $text = str_replace(["\r\n", "\r", "\0"], ["\n", "\n", ' '], $text);
-        $text = preg_replace('/[ \t]+/u', ' ', $text) ?? $text;
+        // Preserve column boundaries for section-aware table parsing.
+
+        return trim(mb_substr($text, 0, self::MAX_EXTRACTED_TEXT));
+    }
+
+    /** Keep TSV column boundaries intact for row-by-row roster import. */
+    private function normalizeSpreadsheetText(string $text): string
+    {
+        $text = str_replace(["\r\n", "\r", "\0"], ["\n", "\n", ' '], $text);
 
         return trim(mb_substr($text, 0, self::MAX_EXTRACTED_TEXT));
     }
@@ -230,6 +629,32 @@ class LocalOcrService
     private function detectDocumentType(string $text): string
     {
         $value = mb_strtolower($text);
+
+        // Explicit document headings outrank incidental license mentions.
+        if (preg_match('/interview[ _-]*rating[ _-]*sheet|verification component\s*:?\s*education|^dataflow\./iu', $text)) return 'other';
+        if (preg_match('/^cert\.[^\n]+\n/iu', $text) && preg_match('/general average rating|examination taken/iu', $text)) return 'other';
+        if (preg_match('/^board of nursing\./iu', $text) && preg_match('/professional regulation|registered nurse|rehistradong/iu', $text)) return 'prc_license';
+
+        if (
+            preg_match('/\bprofessional summary\b/iu', $text)
+            && preg_match('/\bprofessional experience\b/iu', $text)
+        ) {
+            return 'cv';
+        }
+
+        /*
+         * A CV often mentions professional registration or licence details.
+         * Prefer an explicit heading or a CV filename over those incidental
+         * keywords so CV-specific name and address extraction can run.
+         */
+        if (preg_match('/(?:^|\n)[^\p{L}\n]{0,8}(?:curriculum vitae|resume|résumé)\b/iu', $text)
+            || preg_match('/^\s*cv\.(?:pdf|docx?|png|jpe?g)\b/iu', $text)) {
+            return 'cv';
+        }
+
+        if (preg_match('/\b(nursing council|scfhs|saudi commission|nursing and midwifery council|board of nursing)\b/u', $value)
+            && !preg_match('/\b(prc|professional regulation commission)\b/u', $value)) return 'international_license';
+        if (preg_match('/\b(passport|national id|identification card)\b/u', $value)) return 'identity';
         if (preg_match('/\b(prc|professional regulation commission|registration no|license no|licence no)\b/u', $value)) {
             return 'prc_license';
         }
@@ -239,6 +664,7 @@ class LocalOcrService
         if (preg_match('/\b(curriculum vitae|\bcv\b|resume|résumé|work experience|employment history)\b/u', $value)) {
             return 'cv';
         }
+        if (preg_match('/\b(transcript|academic record|transcript of records)\b/u', $value)) return 'transcript';
         if (preg_match('/\b(diploma|bachelor of science in nursing|bsn|bsc nursing|nursing degree|transcript)\b/u', $value)) {
             return 'nursing_diploma';
         }
@@ -306,7 +732,11 @@ class LocalOcrService
     private function message(string $extension, bool $success): string
     {
         if ($success) {
-            return in_array($extension, ['jpg', 'jpeg', 'png'], true) ? 'OCR completed for the image.' : 'Document text extracted.';
+            return in_array($extension, ['jpg', 'jpeg', 'png'], true)
+                ? 'OCR completed for the image.'
+                : (in_array($extension, ['xlsx', 'xls'], true)
+                    ? 'Excel worksheet text extracted.'
+                    : 'Document text extracted.');
         }
 
         return 'Document saved securely. Automatic extraction could not read it, so NurseLink will request the missing information.';

@@ -545,8 +545,10 @@ class MembershipAdministrationController extends Controller
             )
         );
 
+        $origins = app(\App\Services\RegistrationOrigin::class)->map($rows->pluck('user_id')->all());
         $presented = $rows->map(
             function ($row) use (
+                $origins,
                 $users,
                 $reviewers,
                 $latestEmployment,
@@ -601,6 +603,7 @@ class MembershipAdministrationController extends Controller
                     );
 
                 return [
+                    'registration_origin' => $origins[$userId],
                     'membership_id' =>
                         (int) $row->id,
                     'user_id' =>

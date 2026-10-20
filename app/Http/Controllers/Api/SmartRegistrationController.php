@@ -7,6 +7,7 @@ use App\Jobs\ProcessSmartRegistrationDocument;
 use App\Services\MembershipLifecycleService;
 use App\Services\SmartRegistration\LocalOcrService;
 use App\Services\SmartRegistration\SmartRegistrationDocumentProcessor;
+use App\Services\SmartRegistration\EligibilityInsightService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -14,6 +15,8 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
+use Symfony\Component\Process\Process;
 
 class SmartRegistrationController extends Controller
 {
@@ -25,7 +28,7 @@ class SmartRegistrationController extends Controller
 
     private const LOW_CONFIDENCE_THRESHOLD = 0.75;
 
-    public function show(Request $request, LocalOcrService $ocr): JsonResponse
+    public function show(Request $request, LocalOcrService $ocr, EligibilityInsightService $eligibility): JsonResponse
     {
         $user = $request->user();
         $profile = $this->ensureProfile($user);
@@ -34,16 +37,21 @@ class SmartRegistrationController extends Controller
         $suggestions = $this->mergeSuggestions($profile, $documents, $user);
         $missing = $this->missingFields($profile, $documents, $user);
         $fieldStatuses = $this->fieldStatuses($profile, $suggestions, $missing, $user);
+        $support = app(\App\Services\ApplicationProgressService::class)->progress($user,$this->completion($missing));
 
         return response()->json([
             'data' => [
+                'draft_state' => ['revision'=>(int)$support->draft_revision,'sections'=>json_decode($support->draft_data ?? '{}',true) ?: []],
                 'profile' => $this->presentProfile($profile, $user),
                 'documents' => $documents,
                 'suggestions' => $suggestions,
+                'structured_suggestions' => app(\App\Services\SmartRegistration\StructuredProfileData::class)->suggestions($documents),
+                'workflow_review' => app(\App\Services\SmartRegistration\WorkflowReviewService::class)->refresh((string)$user->getKey()),
                 'field_statuses' => $fieldStatuses,
                 'missing' => $missing,
                 'completion' => $this->completion($missing),
                 'membership' => $this->presentMembership($membership),
+                'eligibility_insights' => $eligibility->forProfile($profile, $documents),
                 'extraction_capabilities' => [
                     ...$ocr->capabilities(),
                     'note' => 'Automatic extraction assists data entry only. Applicants must review and confirm extracted values; credential verification remains reviewer-controlled.',
@@ -91,13 +99,13 @@ class SmartRegistrationController extends Controller
         $duplicate = DB::table(self::DOCUMENT_TABLE)
             ->where('user_id', $user->getKey())
             ->where('sha256', $sha)
+            ->where('is_current', true)
             ->first();
 
         if ($duplicate) {
-            return response()->json([
-                'message' => 'This document is already in your Smart Registration file.',
-                'data' => $this->presentDocument($duplicate),
-            ]);
+            abort_if($replacement && (int)$replacement->id !== (int)$duplicate->id,422,
+                'This file is already uploaded as another current document. Re-scan that document or choose a different replacement file.');
+            return $this->reprocess($request, (int)$duplicate->id);
         }
 
         $extension = strtolower((string) $file->getClientOriginalExtension());
@@ -179,6 +187,112 @@ class SmartRegistrationController extends Controller
         ], 201);
     }
 
+    public function reprocess(Request $request, int $id): JsonResponse
+    {
+        $this->assertEditableMembership($request->user());
+        $row=DB::table(self::DOCUMENT_TABLE)->where('id',$id)->where('user_id',$request->user()->getKey())->first();
+        abort_unless($row,404);
+        abort_if(isset($row->is_current) && !$row->is_current,422,'Re-scan the current document version.');
+        abort_if(($row->security_status ?? '')==='quarantined',422,'This document was blocked by the security scanner.');
+        $queued=DB::transaction(function()use($id,$request){
+            $locked=DB::table(self::DOCUMENT_TABLE)->where('id',$id)->where('user_id',$request->user()->getKey())->lockForUpdate()->first();
+            abort_unless($locked,404);
+            abort_if(!$locked->is_current,422,'Re-scan the current document version.');
+            if(!$this->canReprocess($locked)) return false;
+            $fields=$this->decodeJson($locked->extracted_fields ?? null);
+            $total=$fields['_document']['total_pages'] ?? null;
+            $fields['_document']=['total_pages'=>$total,'processed_pages'=>0,'complete'=>false,'pages'=>[]];
+            DB::table(self::DOCUMENT_TABLE)->where('id',$id)->update([
+                'extraction_status'=>'queued','extraction_message'=>'All-page re-scan queued. Your saved profile will not be overwritten.',
+                'extracted_fields'=>json_encode($fields,JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'updated_at'=>now(),
+            ]);
+            return true;
+        });
+        if($queued) {
+            if((bool)config('smart_registration.queue.enabled',true)) ProcessSmartRegistrationDocument::dispatch($id)->onConnection('database');
+            else app(SmartRegistrationDocumentProcessor::class)->process($id);
+        }
+        return response()->json(['message'=>$queued ? 'Document queued for all-page extraction. Review the results before saving.' : 'This document is already being scanned. Results will refresh automatically; no duplicate scan was started.',
+            'data'=>$this->presentDocument(DB::table(self::DOCUMENT_TABLE)->where('id',$id)->first())],202);
+    }
+
+    public function previewDocumentPage(Request $request, int $id, int $page)
+    {
+        abort_if($page < 1 || $page > 300, 404);
+
+        $row = DB::table(self::DOCUMENT_TABLE)
+            ->where('id', $id)
+            ->where('user_id', $request->user()->getKey())
+            ->first();
+
+        abort_unless($row, 404);
+        abort_if(($row->security_status ?? '') === 'quarantined', 423, 'This document is not available for preview.');
+
+        $path = Storage::disk('local')->path($row->storage_path);
+        abort_unless(is_file($path), 404);
+
+        $extension = strtolower(pathinfo((string) $row->original_name, PATHINFO_EXTENSION));
+        if (in_array($extension, ['jpg', 'jpeg', 'png'], true)) {
+            abort_if($page !== 1, 404);
+            if ($request->expectsJson()) {
+                return response()->json([
+                    'data' => [
+                        'mime_type' => $extension === 'png' ? 'image/png' : 'image/jpeg',
+                        'image' => 'data:'.($extension === 'png' ? 'image/png' : 'image/jpeg').';base64,'.base64_encode((string) file_get_contents($path)),
+                    ],
+                ]);
+            }
+            return response()->file($path, [
+                'Cache-Control' => 'private, no-store',
+                'X-Content-Type-Options' => 'nosniff',
+            ]);
+        }
+
+        abort_unless($extension === 'pdf', 415, 'Preview is available for PDFs and images only.');
+
+        $details = $this->decodeJson($row->extracted_fields ?? null)['_document'] ?? [];
+        $total = (int) ($details['total_pages'] ?? 0);
+        if ($total > 0) abort_if($page > $total, 404);
+
+        $previewDir = storage_path('app/nurselink-smart-registration-previews/'.hash('sha256', $row->storage_path.'|'.$row->sha256));
+        if (! is_dir($previewDir) && ! mkdir($previewDir, 0700, true) && ! is_dir($previewDir)) {
+            abort(500, 'Unable to prepare document preview.');
+        }
+
+        $output = $previewDir.'/page-'.$page.'.png';
+        if (! is_file($output)) {
+            $prefix = $previewDir.'/page-'.$page;
+            $process = new Process(['pdftoppm', '-f', (string) $page, '-l', (string) $page, '-singlefile', '-scale-to', '900', '-png', $path, $prefix]);
+            $process->setTimeout(20);
+            $process->run();
+            abort_unless($process->isSuccessful() && is_file($output), 500, 'Unable to render document preview.');
+            chmod($output, 0600);
+        }
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'data' => [
+                    'mime_type' => 'image/png',
+                    'image' => 'data:image/png;base64,'.base64_encode((string) file_get_contents($output)),
+                ],
+            ]);
+        }
+
+        return response()->file($output, [
+            'Cache-Control' => 'private, no-store',
+            'X-Content-Type-Options' => 'nosniff',
+        ]);
+    }
+
+    private function canReprocess(object $row):bool
+    {
+        if(($row->security_status ?? '')==='quarantined' || (isset($row->is_current) && !$row->is_current))return false;
+        if(!in_array($row->extraction_status,['queued','processing'],true))return true;
+        return !empty($row->updated_at)
+            && \Illuminate\Support\Carbon::parse($row->updated_at)->lte(now()->subMinutes(10));
+    }
+
     public function destroyDocument(Request $request, int $id): JsonResponse
     {
         $this->assertEditableMembership($request->user());
@@ -227,6 +341,89 @@ class SmartRegistrationController extends Controller
         return response()->json(['message' => 'Document removed.']);
     }
 
+    public function resetTestRecord(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $this->assertEditableMembership($user);
+
+        DB::transaction(function () use ($user) {
+            $documents = DB::table(self::DOCUMENT_TABLE)
+                ->where('user_id', $user->getKey())
+                ->get(['id', 'storage_path']);
+
+            foreach ($documents as $document) {
+                if (! empty($document->storage_path)) {
+                    Storage::disk('local')->delete($document->storage_path);
+                }
+            }
+
+            DB::table(self::DOCUMENT_TABLE)
+                ->where('user_id', $user->getKey())
+                ->delete();
+
+            DB::table(self::PROFILE_TABLE)
+                ->where('user_id', $user->getKey())
+                ->update([
+                    'first_name' => null,
+                    'middle_name' => null,
+                    'last_name' => null,
+                    'birth_date' => null,
+                    'sex' => null,
+                    'nationality' => null,
+                    'phone' => null,
+                    'address_line1' => null,
+                    'city' => null,
+                    'province' => null,
+                    'country' => null,
+                    'professional_title' => null,
+                    'years_experience' => null,
+                    'current_position' => null,
+                    'current_employer' => null,
+                    'employment_countries' => null,
+                    'healthcare_facility_names' => null,
+                    'employment_positions' => null,
+                    'emergency_contact_name_relationship' => null,
+                    'emergency_contact_phone' => null,
+                    'specialty' => null,
+                    'primary_license_number' => null,
+                    'primary_license_country' => null,
+                    'primary_license_expiry' => null,
+                    'highest_nursing_education' => null,
+                    'graduation_year' => null,
+                    'confirmed_sources' => null,
+                    'structured_data' => null,
+                    'last_extracted_at' => null,
+                    'updated_at' => now(),
+                ]);
+
+            DB::table('nurselink_application_support')
+                ->where('user_id', $user->getKey())
+                ->update([
+                    'progress_percent' => 0,
+                    'draft_revision' => DB::raw('draft_revision + 1'),
+                    'draft_data' => json_encode([], JSON_UNESCAPED_SLASHES),
+                    'issue_code' => null,
+                    'support_status' => 'monitoring',
+                    'last_activity_at' => now(),
+                    'updated_at' => now(),
+                ]);
+
+            if (Schema::hasTable('applications')) {
+                DB::table('applications')
+                    ->where('user_id', $user->getKey())
+                    ->update([
+                        'progress_percent' => 0,
+                        'profile_data' => null,
+                        'updated_at' => now(),
+                    ]);
+            }
+        });
+
+        return response()->json([
+            'message' => 'Smart Registration test record reset. Uploaded documents and extracted fields were cleared.',
+        ]);
+    }
+
     public function savePersonal(Request $request): JsonResponse
     {
         $this->assertEditableMembership($request->user());
@@ -244,6 +441,7 @@ class SmartRegistrationController extends Controller
             'province' => ['nullable', 'string', 'max:120'],
             'country' => ['required', 'string', 'max:120'],
             'sources' => ['nullable', 'array'],
+            'structured_data' => ['sometimes', 'array'],
         ]);
 
         $profile = $this->updateProfile($request, $data, 'personal');
@@ -264,6 +462,11 @@ class SmartRegistrationController extends Controller
             'years_experience' => ['required', 'integer', 'min:0', 'max:80'],
             'current_position' => ['nullable', 'string', 'max:150'],
             'current_employer' => ['nullable', 'string', 'max:190'],
+            'employment_countries' => ['nullable', 'string', 'max:6000'],
+            'healthcare_facility_names' => ['nullable', 'string', 'max:6000'],
+            'employment_positions' => ['nullable', 'string', 'max:6000'],
+            'emergency_contact_name_relationship' => ['nullable', 'string', 'max:255'],
+            'emergency_contact_phone' => ['nullable', 'string', 'max:80'],
             'specialty' => ['nullable', 'string', 'max:150'],
             'primary_license_number' => ['nullable', 'string', 'max:160'],
             'primary_license_country' => ['nullable', 'string', 'max:120'],
@@ -271,6 +474,7 @@ class SmartRegistrationController extends Controller
             'highest_nursing_education' => ['required', 'string', 'max:190'],
             'graduation_year' => ['nullable', 'integer', 'min:1940', 'max:'.(now()->year + 1)],
             'sources' => ['nullable', 'array'],
+            'structured_data' => ['sometimes', 'array'],
         ]);
 
         $profile = $this->updateProfile($request, $data, 'professional');
@@ -296,23 +500,41 @@ class SmartRegistrationController extends Controller
             ], 422);
         }
 
+        app(\App\Services\SmartRegistration\WorkflowReviewService::class)->refresh((string)$user->getKey());
         $membership = $this->ensureDraftMembership($user);
 
         if ($membership->status === 'approved') {
+            $pending = (string) ($membership->profile_update_status ?? '');
+            if (in_array($pending, ['submitted', 'under_review', 'ready_for_approval'], true)) {
+                return response()->json([
+                    'message' => 'Your Smart Registration update is already with a reviewer.',
+                    'data' => $this->presentMembership($membership),
+                ], 422);
+            }
+
+            DB::table('nurselink_memberships')->where('id', $membership->id)->update([
+                'profile_update_status' => 'submitted',
+                'profile_update_submitted_at' => now(),
+                'profile_update_reviewed_at' => null,
+                'profile_update_reviewer_notes' => null,
+                'updated_at' => now(),
+            ]);
+
+            $updated = DB::table('nurselink_memberships')->where('id', $membership->id)->first();
             return response()->json([
-                'message' => 'Your NurseLink membership is already approved.',
-                'data' => $this->presentMembership($membership),
+                'message' => 'Your Smart Registration updates were submitted for reviewer verification. Your membership remains approved and active.',
+                'data' => $this->presentMembership($updated),
             ]);
         }
 
-        if ($membership->status === 'declined') {
+        if ($membership->status === 'declined' && !app(\App\Services\ApplicantPortalAccess::class)->eligible($user)) {
             return response()->json([
                 'message' => 'This application has a completed decision. Contact NurseLink Support if you need the application reopened.',
             ], 422);
         }
 
         $isResubmission = $membership->status === 'needs_information';
-        $allowed = ['draft', 'needs_information'];
+        $allowed = app(\App\Services\ApplicantPortalAccess::class)->eligible($user) ? ['draft','needs_information','declined'] : ['draft','needs_information'];
 
         if (! in_array($membership->status, $allowed, true)) {
             return response()->json([
@@ -400,9 +622,14 @@ class SmartRegistrationController extends Controller
 
     private function assertEditableMembership(object $user): void
     {
+        if (app(\App\Services\ApplicantPortalAccess::class)->eligible($user)) return;
         $membership = $this->ensureDraftMembership($user);
 
-        if (in_array($membership->status, ['draft', 'needs_information'], true)) {
+        if (in_array($membership->status, ['draft', 'submitted', 'under_review', 'ready_for_approval', 'needs_information'], true)) {
+            return;
+        }
+
+        if ($membership->status === 'approved') {
             return;
         }
 
@@ -410,7 +637,7 @@ class SmartRegistrationController extends Controller
             'submitted' => 'Your application has been submitted and is locked while waiting for review.',
             'under_review' => 'Your application is currently under review and cannot be changed unless a reviewer requests more information.',
             'ready_for_approval' => 'Your application is awaiting final approval and cannot be changed.',
-            'approved' => 'Your membership is approved. Use your member profile to update information.',
+            'approved' => 'Your Smart Registration update is locked while it is with a reviewer.',
             'declined' => 'This application has a completed decision. Contact NurseLink Support if it needs to be reopened.',
         ];
 
@@ -424,6 +651,11 @@ class SmartRegistrationController extends Controller
 
         $existing = $this->ensureProfile($request->user());
         $confirmed = $this->decodeJson($existing->confirmed_sources ?? null);
+        if (array_key_exists('structured_data',$data)) {
+            $saved=$this->decodeJson($existing->structured_data ?? null);
+            $records=app(\App\Services\SmartRegistration\StructuredProfileData::class)->merge($saved,$data['structured_data'],$section,$request->user()->getKey());
+            $data['structured_data']=json_encode($records,JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        }
         $confirmed[$section] = is_array($sources) ? $sources : [];
 
         $data['confirmed_sources'] = json_encode($confirmed, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -643,10 +875,10 @@ class SmartRegistrationController extends Controller
                     'issuing_body' => null,
                     'credential_number' => null,
                     'country' => null,
-                    'issue_date' => ! empty($data['graduation_year']) ? $data['graduation_year'].'-01-01' : null,
+                    'issue_date' => null, // A graduation year does not document an issue day.
                     'expiry_date' => null,
                     'verification_status' => 'unverified',
-                    'notes' => 'Created from applicant-confirmed Smart Registration information.',
+                    'notes' => 'Created from applicant-confirmed Smart Registration information.'.(!empty($data['graduation_year']) ? ' Graduation year: '.$data['graduation_year'].' (year precision).' : ''),
                     'review_notes' => null,
                     'reviewed_by' => null,
                     'reviewed_at' => null,
@@ -676,6 +908,20 @@ class SmartRegistrationController extends Controller
 
     private function presentDocument(object $row): array
     {
+        $extracted=$this->decodeJson($row->extracted_fields ?? null);
+        $documentDetails=$extracted['_document'] ?? [];
+        if ($documentDetails === [] && preg_match('/(\d+)\s+of\s+(\d+)\s+pages\s+processed/i', (string)($row->extraction_message ?? ''), $progress)) {
+            $processed=max(0,(int)$progress[1]);
+            $total=max(0,(int)$progress[2]);
+            $documentDetails=[
+                'total_pages'=>$total,
+                'processed_pages'=>min($processed,$total),
+                'complete'=>$total > 0 && $processed >= $total,
+                'pages'=>[],
+                'progress_source'=>'extraction_message',
+            ];
+        }
+        $previewImage = $this->previewImageDataFor($row, $documentDetails);
         return [
             'id' => (int) $row->id,
             'name' => $row->original_name,
@@ -686,12 +932,68 @@ class SmartRegistrationController extends Controller
             'security_message' => $row->security_message ?? null,
             'security_scanned_at' => $row->security_scanned_at ?? null,
             'extraction_status' => $row->extraction_status,
-            'extracted_fields' => $this->decodeJson($row->extracted_fields ?? null),
+            'can_reprocess' => $this->canReprocess($row),
+            'extracted_fields' => array_filter($extracted,fn($key)=>!str_starts_with((string)$key,'_'),ARRAY_FILTER_USE_KEY),
+            'structured_records' => $extracted['_structured'] ?? [],
+            'extraction_details' => $documentDetails,
+            'preview_image' => $previewImage,
             'extraction_message' => $row->extraction_message,
             'version' => isset($row->version) ? (int) $row->version : 1,
             'is_current' => isset($row->is_current) ? (bool) $row->is_current : true,
             'replaces_document_id' => isset($row->replaces_document_id) && $row->replaces_document_id !== null ? (int) $row->replaces_document_id : null,
             'created_at' => $row->created_at,
+            'updated_at' => $row->updated_at ?? null,
+        ];
+    }
+
+    private function previewImageDataFor(object $row, array $documentDetails): ?array
+    {
+        $total = (int) ($documentDetails['total_pages'] ?? 0);
+        if ($total < 1 || ($row->security_status ?? '') === 'quarantined') return null;
+
+        $processed = max(0, min((int) ($documentDetails['processed_pages'] ?? 0), $total));
+        $active = in_array((string) ($row->extraction_status ?? ''), ['queued', 'processing'], true);
+        $page = $active ? min(max($processed + 1, 1), $total) : max($processed, 1);
+
+        $path = Storage::disk('local')->path($row->storage_path);
+        if (! is_file($path)) return null;
+
+        $extension = strtolower(pathinfo((string) $row->original_name, PATHINFO_EXTENSION));
+        if (in_array($extension, ['jpg', 'jpeg', 'png'], true)) {
+            if ($page !== 1) return null;
+            $mime = $extension === 'png' ? 'image/png' : 'image/jpeg';
+            return [
+                'page' => 1,
+                'mime_type' => $mime,
+                'image' => 'data:'.$mime.';base64,'.base64_encode((string) file_get_contents($path)),
+            ];
+        }
+
+        if ($extension !== 'pdf') return null;
+
+        $previewDir = storage_path('app/nurselink-smart-registration-previews/'.hash('sha256', $row->storage_path.'|'.$row->sha256));
+        if (! is_dir($previewDir)) {
+            try {
+                if (! mkdir($previewDir, 0770, true) && ! is_dir($previewDir)) return null;
+            } catch (\Throwable) {
+                return null;
+            }
+        }
+
+        $output = $previewDir.'/page-'.$page.'.png';
+        if (! is_file($output)) {
+            $prefix = $previewDir.'/page-'.$page;
+            $process = new Process(['pdftoppm', '-f', (string) $page, '-l', (string) $page, '-singlefile', '-scale-to', '900', '-png', $path, $prefix]);
+            $process->setTimeout(20);
+            $process->run();
+            if (! $process->isSuccessful() || ! is_file($output)) return null;
+            @chmod($output, 0660);
+        }
+
+        return [
+            'page' => $page,
+            'mime_type' => 'image/png',
+            'image' => 'data:image/png;base64,'.base64_encode((string) file_get_contents($output)),
         ];
     }
 
@@ -714,6 +1016,11 @@ class SmartRegistrationController extends Controller
             'years_experience' => $row->years_experience !== null ? (int) $row->years_experience : null,
             'current_position' => $row->current_position,
             'current_employer' => $row->current_employer,
+            'employment_countries' => $row->employment_countries ?? null,
+            'healthcare_facility_names' => $row->healthcare_facility_names ?? null,
+            'employment_positions' => $row->employment_positions ?? null,
+            'emergency_contact_name_relationship' => $row->emergency_contact_name_relationship ?? null,
+            'emergency_contact_phone' => $row->emergency_contact_phone ?? null,
             'specialty' => $row->specialty,
             'primary_license_number' => $row->primary_license_number,
             'primary_license_country' => $row->primary_license_country,
@@ -721,6 +1028,7 @@ class SmartRegistrationController extends Controller
             'highest_nursing_education' => $row->highest_nursing_education,
             'graduation_year' => $row->graduation_year !== null ? (int) $row->graduation_year : null,
             'confirmed_sources' => $this->decodeJson($row->confirmed_sources ?? null),
+            'structured_data' => $this->decodeJson($row->structured_data ?? null),
             'last_extracted_at' => $row->last_extracted_at,
         ];
     }
@@ -745,6 +1053,12 @@ class SmartRegistrationController extends Controller
             'member_number' => $row->member_number ?? null,
             'approved_at' => $row->approved_at ?? null,
             'last_status_changed_at' => $row->last_status_changed_at ?? null,
+            'applicant_portal_access' => app(\App\Services\ApplicantPortalAccess::class)->eligible(\App\Models\User::find($row->user_id)),
+            'approval_required' => !app(\App\Services\ApplicantPortalAccess::class)->enabled(),
+            'profile_update_status' => $row->profile_update_status ?? null,
+            'profile_update_submitted_at' => $row->profile_update_submitted_at ?? null,
+            'profile_update_reviewed_at' => $row->profile_update_reviewed_at ?? null,
+            'profile_update_reviewer_notes' => $row->profile_update_reviewer_notes ?? null,
             'status_history' => app(MembershipLifecycleService::class)
                 ->historyForApplicant((int) $row->id),
         ];
@@ -802,54 +1116,60 @@ class SmartRegistrationController extends Controller
 
     private function mergeSuggestions(object $profile, array $documents, object $user): array
     {
-        $candidates = [];
+        $candidates=[];
+        // Normalize only clear source-field synonyms; never infer a name split or a date.
+        $aliases = [
+            'given_name'=>'first_name', 'surname'=>'last_name', 'family_name'=>'last_name',
+            'date_of_birth'=>'birth_date', 'dob'=>'birth_date', 'gender'=>'sex',
+            'citizenship'=>'nationality', 'mobile_number'=>'phone', 'mobile_phone'=>'phone',
+            'telephone'=>'phone', 'contact_number'=>'phone', 'email_address'=>'email',
+            'address'=>'address_line1', 'street_address'=>'address_line1',
+            'residential_address'=>'address_line1', 'country_of_residence'=>'country',
+            'province_state'=>'province', 'municipality'=>'city',
+        ];
+        foreach ($documents as $document) foreach ($document['extracted_fields'] ?? [] as $field=>$candidate) {
+            $field = $aliases[$field] ?? $field;
+            // A Philippine ZIP/postal code is not a province. Keep the original
+            // extraction in the document record for human review instead.
+            if ($field === 'province' && is_array($candidate)) {
+                $raw = trim((string) ($candidate['value'] ?? ''));
+                if (preg_match('/^[0-9]{4}(?:\s*[,;.]\s*)?$/', $raw)) continue;
+            }
 
-        foreach ($documents as $document) {
-            foreach (($document['extracted_fields'] ?? []) as $field => $candidate) {
-                if (! is_array($candidate) || trim((string) ($candidate['value'] ?? '')) === '') {
-                    continue;
-                }
-
-                $confidence = (float) ($candidate['confidence'] ?? 0.5);
-                $value = $candidate['value'];
-                $key = $this->comparableValue($value);
-                if ($key === '') {
-                    continue;
-                }
-
-                $existing = $candidates[$field][$key] ?? null;
-                if ($existing && $confidence <= (float) $existing['confidence']) {
-                    continue;
-                }
-
-                $candidates[$field][$key] = [
-                    'value' => $value,
-                    'confidence' => round($confidence, 2),
-                    'source_document_id' => $document['id'],
-                    'source_name' => $document['name'],
-                    'source_type' => $document['document_type'],
+            if (!is_array($candidate) || !is_scalar($candidate['value'] ?? null)) continue;
+            foreach ([$candidate,...($candidate['alternatives'] ?? [])] as $variant) {
+                if (!is_scalar($variant['value'] ?? null) || trim((string)$variant['value'])==='') continue;
+                $key=$this->comparableValue($variant['value']); if ($key==='') continue;
+                $confidence=(float)($variant['confidence'] ?? .5);
+                $previous=$candidates[$field][$key] ?? null;
+                if ($previous && $previous['confidence'] >= $confidence) continue;
+                $candidates[$field][$key]=[
+                    'value'=>$variant['value'],'confidence'=>round($confidence,2),
+                    'source_document_id'=>$document['id'],'source_name'=>$document['name'],
+                    'source_type'=>$document['document_type'],'source_page'=>$variant['source_page'] ?? null,
+                    'source_excerpt'=>$variant['source_excerpt'] ?? null,
+                    'source_pages'=>$variant['source_pages'] ?? [],
+                    'source_method'=>$variant['source_method'] ?? null,
+                    'normalization_version'=>$variant['normalization_version'] ?? null,
+                    'review_required'=>(bool)($variant['review_required'] ?? false),
+                    'document_conflict'=>(bool)($candidate['conflict'] ?? false),
                 ];
             }
         }
-
-        $current = $this->presentProfile($profile, $user);
-        $best = [];
-
-        foreach ($candidates as $field => $distinct) {
-            $ranked = array_values($distinct);
-            usort($ranked, fn (array $a, array $b): int => $b['confidence'] <=> $a['confidence']);
-            $candidate = $ranked[0];
-            $existing = $current[$field] ?? null;
-            $candidate['already_saved'] = $existing !== null && trim((string) $existing) !== '';
-            $candidate['conflict'] = count($ranked) > 1;
-            $candidate['low_confidence'] = (float) $candidate['confidence'] < self::LOW_CONFIDENCE_THRESHOLD;
-            $candidate['status'] = ($candidate['conflict'] || $candidate['low_confidence'])
-                ? 'needs_review'
-                : 'extracted';
-            $candidate['alternatives'] = $ranked;
-            $best[$field] = $candidate;
+        $current=$this->presentProfile($profile,$user); $best=[];
+        foreach ($candidates as $field=>$distinct) {
+            $ranked=array_values($distinct);
+            usort($ranked,fn($a,$b)=>$b['confidence']<=>$a['confidence']);
+            $candidate=$ranked[0]; $existing=$current[$field] ?? null;
+            $hasSaved=is_scalar($existing) && trim((string)$existing)!=='';
+            $different=$hasSaved && $this->comparableValue($existing)!==$this->comparableValue($candidate['value']);
+            $candidate['already_saved']=$hasSaved;
+            $candidate['conflict']=count($ranked)>1 || $different || $candidate['document_conflict'];
+            $candidate['low_confidence']=$candidate['confidence']<self::LOW_CONFIDENCE_THRESHOLD || $candidate['review_required'];
+            $candidate['status']=($candidate['conflict'] || $candidate['low_confidence']) ? 'needs_review' : 'extracted';
+            if ($different) $ranked[]=['value'=>$existing,'source_name'=>'Your saved profile','confidence'=>1,'source_page'=>null];
+            $candidate['alternatives']=$ranked; $best[$field]=$candidate;
         }
-
         return $best;
     }
 
@@ -880,7 +1200,7 @@ class SmartRegistrationController extends Controller
         $statuses = [];
 
         foreach ($fields as $field) {
-            if ($field === 'confirmed_sources' || $field === 'last_extracted_at') {
+            if ($field === 'confirmed_sources' || $field === 'last_extracted_at' || $field === 'structured_data') {
                 continue;
             }
             $value = $current[$field] ?? null;

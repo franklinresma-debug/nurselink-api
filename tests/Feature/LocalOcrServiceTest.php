@@ -6,6 +6,7 @@ use App\Jobs\ProcessSmartRegistrationDocument;
 use App\Services\SmartRegistration\DocumentExtractor;
 use App\Services\SmartRegistration\LocalOcrDocumentExtractor;
 use App\Services\SmartRegistration\LocalOcrService;
+use App\Services\SmartRegistration\ManualReviewExtractor;
 use Tests\TestCase;
 
 class LocalOcrServiceTest extends TestCase
@@ -37,11 +38,11 @@ class LocalOcrServiceTest extends TestCase
         $this->assertSame(2012, $fields['graduation_year']['value']);
     }
 
-    public function test_local_ocr_is_the_configured_legacy_pipeline_extractor(): void
+    public function test_configured_document_extractor_matches_manual_review_runtime(): void
     {
-        $this->assertSame('local_ocr', config('smart_registration.extractor'));
+        $this->assertSame('manual_review', config('smart_registration.extractor'));
         $this->assertInstanceOf(
-            LocalOcrDocumentExtractor::class,
+            ManualReviewExtractor::class,
             app(DocumentExtractor::class)
         );
     }

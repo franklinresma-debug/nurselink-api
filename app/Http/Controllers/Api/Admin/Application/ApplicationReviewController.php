@@ -40,11 +40,13 @@ class ApplicationReviewController extends Controller
 
     public function approve(Request $request, Application $application, ApplicationLifecycleService $flow): JsonResponse
     {
+        abort_if(app(\App\Services\ApplicantPortalAccess::class)->enabled(),422,'Applicant registration approval is disabled; access is available without approval.');
         return response()->json(['data' => $flow->approve($application, $request->user())]);
     }
 
     public function reject(Request $request, Application $application, ApplicationLifecycleService $flow): JsonResponse
     {
+        abort_if(app(\App\Services\ApplicantPortalAccess::class)->enabled(),422,'Applicant registration approval is disabled; access is available without approval.');
         $data = $request->validate(['reason' => ['required','string','min:5','max:4000']]);
         return response()->json(['data' => $flow->transition($application, $request->user(), 'rejected', $data['reason'])]);
     }
