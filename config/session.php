@@ -14,7 +14,7 @@ return [
     'lottery' => [2, 100],
     'cookie' => env('SESSION_COOKIE', Str::slug((string) env('APP_NAME', 'nurselink')).'-session'),
     'path' => env('SESSION_PATH', '/'),
-    'domain' => env('SESSION_DOMAIN', '.amsertech.com'),
+    'domain' => env('SESSION_DOMAIN', '.lbs-nurselink.local'),
     'secure' => env('SESSION_SECURE_COOKIE', true),
     'http_only' => env('SESSION_HTTP_ONLY', true),
     'same_site' => env('SESSION_SAME_SITE', 'lax'),

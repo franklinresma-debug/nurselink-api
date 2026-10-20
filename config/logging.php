@@ -10,8 +10,8 @@ return [
     'deprecations' => ['channel' => env('LOG_DEPRECATIONS_CHANNEL', 'null'), 'trace' => env('LOG_DEPRECATIONS_TRACE', false)],
     'channels' => [
         'stack' => ['driver' => 'stack', 'channels' => explode(',', (string) env('LOG_STACK', 'daily')), 'ignore_exceptions' => false],
-        'single' => ['driver' => 'single', 'path' => storage_path('logs/laravel.log'), 'level' => env('LOG_LEVEL', 'debug'), 'replace_placeholders' => true],
-        'daily' => ['driver' => 'daily', 'path' => storage_path('logs/laravel.log'), 'level' => env('LOG_LEVEL', 'warning'), 'days' => env('LOG_DAILY_DAYS', 14), 'replace_placeholders' => true],
+        'single' => ['driver' => 'single', 'permission' => 0660, 'locking' => true, 'path' => storage_path('logs/laravel.log'), 'level' => env('LOG_LEVEL', 'debug'), 'replace_placeholders' => true],
+        'daily' => ['driver' => 'daily', 'permission' => 0660, 'locking' => true, 'path' => storage_path('logs/laravel.log'), 'level' => env('LOG_LEVEL', 'warning'), 'days' => env('LOG_DAILY_DAYS', 14), 'replace_placeholders' => true],
         'stderr' => ['driver' => 'monolog', 'level' => env('LOG_LEVEL', 'debug'), 'handler' => StreamHandler::class, 'handler_with' => ['stream' => 'php://stderr'], 'formatter' => env('LOG_STDERR_FORMATTER'), 'processors' => [PsrLogMessageProcessor::class]],
         'syslog' => ['driver' => 'syslog', 'level' => env('LOG_LEVEL', 'debug'), 'facility' => env('LOG_SYSLOG_FACILITY', LOG_USER), 'replace_placeholders' => true],
         'errorlog' => ['driver' => 'errorlog', 'level' => env('LOG_LEVEL', 'debug'), 'replace_placeholders' => true],

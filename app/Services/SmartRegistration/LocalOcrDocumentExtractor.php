@@ -21,7 +21,7 @@ class LocalOcrDocumentExtractor implements DocumentExtractor
                 'field_path' => $field,
                 'value' => is_scalar($candidate['value'] ?? null) ? (string) $candidate['value'] : null,
                 'confidence' => $candidate['confidence'] ?? null,
-                'source_page' => null,
+                'source_page' => $candidate['source_page'] ?? null,
                 'source_label' => $result['document_type'],
             ]
         )->values()->all();

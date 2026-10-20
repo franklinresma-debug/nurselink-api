@@ -34,7 +34,7 @@ return Application::configure(basePath: dirname(__DIR__))
 
         $middleware->redirectGuestsTo(function (Request $request): string {
             $frontend = rtrim(
-                (string) env('FRONTEND_URL', 'https://app.amsertech.com'),
+                (string) config('app.frontend_url', 'https://lbs.amsertech.com'),
                 '/'
             );
 
@@ -51,12 +51,14 @@ return Application::configure(basePath: dirname(__DIR__))
         });
 
         $middleware->alias([
+            'verified' => \App\Http\Middleware\EnsureVerifiedOrApplicantEditing::class,
             'active.user' => EnsureActiveUser::class,
             'mfa.required' => RequireMfaWhenRequired::class,
             'permission' => RequirePermission::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        // NurseLink API exceptions use Laravel's default JSON negotiation.
+        $exceptions->dontFlash(['imap.password', 'smtp.password']);
+        // LBS NurseLink API exceptions use Laravel's default JSON negotiation.
     })
     ->create();

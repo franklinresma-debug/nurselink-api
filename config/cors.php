@@ -17,7 +17,7 @@ return [
     'allowed_methods' => ['*'],
 
     'allowed_origins' => [
-        env('FRONTEND_URL', 'https://app.amsertech.com'),
+        env('FRONTEND_URL', 'https://lbs.amsertech.com'),
     ],
 
     'allowed_origins_patterns' => [],

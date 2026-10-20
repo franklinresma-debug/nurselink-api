@@ -1,11 +1,11 @@
 <?php
 
 return [
-    'name' => env('APP_NAME', 'NurseLink API'),
+    'name' => env('APP_NAME', 'LBS NurseLink API'),
     'env' => env('APP_ENV', 'production'),
     'debug' => (bool) env('APP_DEBUG', false),
-    'url' => env('APP_URL', 'https://api.amsertech.com'),
-    'frontend_url' => env('FRONTEND_URL', 'https://app.amsertech.com'),
+    'url' => env('APP_URL', 'https://lbs.amsertech.com/backend'),
+    'frontend_url' => env('FRONTEND_URL', 'https://lbs.amsertech.com'),
     'timezone' => env('APP_TIMEZONE', 'Asia/Manila'),
     'locale' => env('APP_LOCALE', 'en'),
     'fallback_locale' => env('APP_FALLBACK_LOCALE', 'en'),

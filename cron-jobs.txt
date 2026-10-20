@@ -6,4 +6,4 @@ Replace API_ROOT and PHP_BIN with the paths returned by `pwd` and `command -v ph
 Laravel Scheduler - every minute
 * * * * * cd API_ROOT && PHP_BIN artisan schedule:run >> API_ROOT/storage/logs/cron-schedule.log 2>&1
 
-Run the queue as a supervised service using deployment/systemd/nurselink-queue.service.
+Run the queue as a supervised service using deployment/systemd/lbs-nurselink-queue.service.

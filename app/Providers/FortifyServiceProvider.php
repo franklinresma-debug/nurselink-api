@@ -19,6 +19,8 @@ class FortifyServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        URL::forceRootUrl(rtrim((string) config('app.url'), '/'));
+        URL::forceScheme('https');
         VerifyEmail::createUrlUsing(fn ($user) => URL::temporarySignedRoute(
             'nurselink.verification.verify',
             now()->addMinutes(60),

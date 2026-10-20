@@ -42,7 +42,7 @@ class QualificationAssessmentService
 
     public function submit(QualificationAssessment $assessment,?string $note=null):QualificationAssessment
     {
-        abort_unless($assessment->status==='system_ready',422,'Assessment must be evaluated before submission.');
+        abort_unless($assessment->status==='system_ready' && $assessment->requirements_total>0,422,'Published assessment requirements are needed before submission.');
         $assessment->update(['status'=>'submitted','submitted_at'=>now(),'member_note'=>$note]);
         return $assessment->fresh();
     }

@@ -67,6 +67,8 @@ class CreateNewUser implements CreatesNewUsers
             $applicant->id => ['assigned_at' => now()],
         ]);
 
+        app(\App\Services\ApplicationProgressService::class)->ensure($user);
+
         $this->audit->write('auth.registered', $user, 'user', $user->id, [
             'role' => 'applicant',
             'terms_version' => $user->terms_version,

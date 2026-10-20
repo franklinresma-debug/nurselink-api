@@ -1,14 +1,14 @@
 {
   "$schema": "https://getcomposer.org/schema.json",
-  "name": "kapit-bisig/nurselink-api",
+  "name": "lbs-medical-services/nurselink-api",
   "type": "project",
-  "description": "NurseLink by KAPIT-BISIG - cPanel API deployment edition.",
-  "keywords": ["laravel", "nurselink", "kapit-bisig"],
+  "description": "LBS NurseLink Medical Services Division - cPanel API deployment edition.",
+  "keywords": ["laravel", "nurselink", "lbs", "medical-services"],
   "license": "proprietary",
   "require": {
-    "php": "^8.3",
-    "laravel/framework": "^13.8",
+    "php": "^8.4",
     "laravel/fortify": "^1.37",
+    "laravel/framework": "^13.8",
     "laravel/sanctum": "^4.3",
     "laravel/tinker": "^3.0"
   },

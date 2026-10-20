@@ -61,7 +61,7 @@ class CredentialRenewalController extends Controller
                 'credentials' => $rows,
                 'advisory' => [
                     'official_authority' => false,
-                    'message' => 'NurseLink renewal planning is an internal professional-development and compliance aid. Official renewal requirements and validity remain with the issuing body or regulator.',
+                    'message' => 'LBS NurseLink renewal planning is an internal professional-development and compliance aid. Official renewal requirements and validity remain with the issuing body or regulator.',
                 ],
             ],
         ]);
@@ -527,7 +527,7 @@ class CredentialRenewalController extends Controller
             'advisory' => [
                 'official_renewal_certification' => false,
                 'message' =>
-                    'Completing the NurseLink workflow does not certify renewal by the issuing body. The member must update the credential record and any reviewer verification remains separate.',
+                    'Completing the LBS NurseLink workflow does not certify renewal by the issuing body. The member must update the credential record and any reviewer verification remains separate.',
             ],
         ]);
     }
@@ -842,7 +842,7 @@ class CredentialRenewalController extends Controller
             && hash_equals($elevatedUserId, $userId)
             && $expiresAt >= time(),
             403,
-            'A separate NurseLink Administrator Portal sign-in is required.'
+            'A separate LBS NurseLink Administrator Portal sign-in is required.'
         );
 
         $reviewRole = Schema::hasTable(
@@ -1009,9 +1009,9 @@ class CredentialRenewalController extends Controller
             'title' =>
                 'Credential renewal workflow updated',
             'message' =>
-                'Your NurseLink credential renewal workflow is now '
+                'Your LBS NurseLink credential renewal workflow is now '
                 . $label
-                . '. This is a NurseLink workflow status and does not replace official confirmation from the issuing body.',
+                . '. This is a LBS NurseLink workflow status and does not replace official confirmation from the issuing body.',
             'action_url' =>
                 '/nurselink-credential-renewal.html',
             'created_at' => now(),

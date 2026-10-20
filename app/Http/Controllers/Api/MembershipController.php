@@ -12,7 +12,7 @@ use Illuminate\Support\Str;
 
 class MembershipController extends Controller
 {
-    private const FRONTEND_URL = 'https://app.amsertech.com';
+    private const FRONTEND_URL = 'https://lbs.amsertech.com';
     public function me(Request $request): JsonResponse
     {
         $user = $request->user();
@@ -166,7 +166,7 @@ class MembershipController extends Controller
         return [
             'id' => (int) $row->id,
             'status' => $row->status,
-            'member_number' => $row->member_number,
+            'member_number' => $row->member_number ?: app(\App\Services\ApplicantPortalAccess::class)->ownRecord($user)?->member_no,
             'verification_code' => $row->verification_code,
             'verification_url' => $row->verification_code
                 ? self::FRONTEND_URL
@@ -185,7 +185,9 @@ class MembershipController extends Controller
             'standing_label' => $row->status === 'approved'
                 ? ucfirst($this->normalizedStanding($row))
                 : null,
-            'active_access' => $row->status === 'approved'
+            'applicant_portal_access' => app(\App\Services\ApplicantPortalAccess::class)->eligible($user),
+            'approval_required' => !app(\App\Services\ApplicantPortalAccess::class)->enabled(),
+            'active_access' => app(\App\Services\ApplicantPortalAccess::class)->eligible($user) || $row->status === 'approved'
                 && $this->normalizedStanding($row) === 'active',
             'standing_reason' => $row->standing_reason ?? null,
             'standing_changed_at' =>

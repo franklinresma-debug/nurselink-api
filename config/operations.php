@@ -1,6 +1,6 @@
 <?php
 return [
-    'build' => env('NURSELINK_BUILD', 'NL-013-ultahost-pilot'),
+    'build' => env('NURSELINK_BUILD', 'LBS-NL-MSD-0.1.0'),
     'release' => env('NURSELINK_RELEASE', '1.0.0'),
     'environment_label' => env('NURSELINK_ENVIRONMENT_LABEL', env('APP_ENV', 'production')),
     'ready_checks' => ['database','cache','queue','private_storage'],
@@ -11,9 +11,9 @@ return [
         'root' => env('NURSELINK_BACKUP_ROOT'),
     ],
     'monitoring' => [
-        'web_url' => env('NURSELINK_MONITOR_WEB_URL', 'https://app.amsertech.com/'),
-        'readiness_url' => env('NURSELINK_MONITOR_READY_URL', 'https://api.amsertech.com/api/health/ready'),
-        'alert_email' => env('NURSELINK_MONITOR_ALERT_EMAIL', 'franklin.resma@gmail.com'),
+        'web_url' => env('NURSELINK_MONITOR_WEB_URL', 'https://lbs.amsertech.com/'),
+        'readiness_url' => env('NURSELINK_MONITOR_READY_URL', 'https://lbs.amsertech.com/backend/api/health/ready'),
+        'alert_email' => env('NURSELINK_MONITOR_ALERT_EMAIL', 'dev-admin@lbs-nurselink.local'),
         'maximum_backup_age_hours' => (int) env('NURSELINK_MONITOR_BACKUP_MAX_HOURS', 26),
         'minimum_disk_free_percent' => (float) env('NURSELINK_MONITOR_DISK_FREE_PERCENT', 15),
         'queue_lag_minutes' => (int) env('NURSELINK_MONITOR_QUEUE_LAG_MINUTES', 15),

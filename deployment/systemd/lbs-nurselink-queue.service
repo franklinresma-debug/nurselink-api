@@ -1,0 +1,26 @@
+[Unit]
+Description=LBS NurseLink Laravel queue worker
+After=network.target mysql.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+UMask=0007
+WorkingDirectory=/var/www/lbs-nurselink-api
+ExecStart=/usr/bin/php artisan queue:work database --queue=document-extraction,default --sleep=3 --tries=3 --timeout=180 --max-time=3600
+ExecReload=/usr/bin/php artisan queue:restart
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=100
+StandardOutput=append:/var/www/lbs-nurselink-api/storage/logs/queue-worker.log
+StandardError=append:/var/www/lbs-nurselink-api/storage/logs/queue-worker-error.log
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/www/lbs-nurselink-api/storage /var/www/lbs-nurselink-api/bootstrap/cache
+
+[Install]
+WantedBy=multi-user.target

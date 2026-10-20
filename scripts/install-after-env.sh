@@ -42,11 +42,11 @@ php artisan nurselink:ops-readiness || true
 
 echo
 cat <<'TXT'
-NurseLink API installation phase complete.
+LBS NurseLink API installation phase complete.
 Next:
   1. Create the Super Administrator:
      php artisan nurselink:make-super-admin YOUR_EMAIL
   2. Install the scheduler cron and supervised queue worker from deployment/.
-  3. Open https://api.amsertech.com/api/health/live
+  3. Open http://api.lbs-nurselink.local/api/health/live
   4. Run deployment/scripts/post-deploy-verify.sh.
 TXT

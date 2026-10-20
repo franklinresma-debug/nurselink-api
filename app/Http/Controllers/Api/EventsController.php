@@ -586,7 +586,7 @@ class EventsController extends Controller
             && hash_equals($elevatedUserId, $userId)
             && $expiresAt >= time(),
             403,
-            'A separate NurseLink Administrator Portal sign-in is required.'
+            'A separate LBS NurseLink Administrator Portal sign-in is required.'
         );
 
         $reviewRole = Schema::hasTable('nurselink_reviewer_access')

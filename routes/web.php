@@ -6,7 +6,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', fn () => response()->json([
-    'product' => 'NurseLink by KAPIT-BISIG',
+    'product' => 'LBS NurseLink Medical Services Division',
     'build' => config('operations.build'),
     'api' => '/api/health',
 ]));
@@ -31,7 +31,7 @@ Route::get('/email/verify', function () {
 Route::options('/{any}', function (Request $request) {
     $origin = (string) $request->headers->get('Origin', '');
 
-    if ($origin !== 'https://app.amsertech.com') {
+    if ($origin !== rtrim((string) config('app.frontend_url'), '/')) {
         return response('', 403);
     }
 
@@ -61,6 +61,6 @@ Route::get('/verify-email/{id}/{hash}', function (string $id, string $hash) {
     }
 
     return redirect(rtrim((string) config('app.frontend_url'), '/').'/dashboard?verified=1');
-})->middleware(['signed', 'throttle:6,1'])->name('nurselink.verification.verify');
+})->middleware([\App\Http\Middleware\ValidatePublicVerificationSignature::class, 'throttle:6,1'])->name('nurselink.verification.verify');
 
 /* NURSELINK_VERIFICATION_RECOVERY_V560_END */

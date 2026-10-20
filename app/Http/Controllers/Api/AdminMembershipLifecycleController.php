@@ -246,7 +246,7 @@ class AdminMembershipLifecycleController extends Controller
             && (time() - $elevatedAt)
                 <= self::ADMIN_ELEVATION_TTL_SECONDS,
             403,
-            'A separate NurseLink Administrator Portal sign-in is required.'
+            'A separate LBS NurseLink Administrator Portal sign-in is required.'
         );
 
         $reviewRole = Schema::hasTable('nurselink_reviewer_access')
@@ -353,18 +353,18 @@ class AdminMembershipLifecycleController extends Controller
         $copy = [
             'active' => [
                 'success',
-                'NurseLink membership reactivated',
-                'Your NurseLink membership is in Active standing and member-only services are available.',
+                'LBS NurseLink membership reactivated',
+                'Your LBS NurseLink membership is in Active standing and member-only services are available.',
             ],
             'suspended' => [
                 'warning',
-                'NurseLink membership suspended',
-                'Your NurseLink membership is currently Suspended. Member-only services are temporarily unavailable. Review your membership status for details.',
+                'LBS NurseLink membership suspended',
+                'Your LBS NurseLink membership is currently Suspended. Member-only services are temporarily unavailable. Review your membership status for details.',
             ],
             'inactive' => [
                 'warning',
-                'NurseLink membership inactive',
-                'Your NurseLink membership is currently Inactive. Member-only services are unavailable until the membership is reactivated.',
+                'LBS NurseLink membership inactive',
+                'Your LBS NurseLink membership is currently Inactive. Member-only services are unavailable until the membership is reactivated.',
             ],
         ];
 

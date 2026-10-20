@@ -64,6 +64,9 @@ class JobOpportunityController extends Controller
             ->where('user_id', $userId)
             ->get();
 
+        $bridge=app(\App\Services\SmartRegistration\ProfileEvidenceBridge::class);
+        $employment=$employment->concat($bridge->records((string)$userId,'employment')->map(fn($r)=>(object)['start_date'=>$r->started_on,'end_date'=>$r->ended_on,'is_current'=>$r->is_current]));
+        $credentials=$credentials->concat($bridge->records((string)$userId,'credential')->map(fn($r)=>(object)['credential_type'=>$r->credential_type ?? $r->category,'verification_status'=>'unverified','expiry_date'=>$r->expires_on]));
         return [
             'career' => $career,
             'credentials' => $credentials,
@@ -96,6 +99,13 @@ class JobOpportunityController extends Controller
             'requirements' => $job->requirements,
             'apply_url' => $job->apply_url,
             'source_label' => $job->source_label,
+            'source_authority' => $job->source_authority ?? null,
+            'agency_name' => $job->agency_name ?? null,
+            'dmw_job_order_number' => $job->dmw_job_order_number ?? null,
+            'dmw_job_order_url' => $job->dmw_job_order_url ?? null,
+            'dmw_agency_checked_at' => $job->dmw_agency_checked_at ?? null,
+            'dmw_job_order_checked_at' => $job->dmw_job_order_checked_at ?? null,
+            'source_verification_status' => $job->source_verification_status ?? null,
             'status' => $job->status,
             'published_at' => $job->published_at,
             'expires_at' => $job->expires_at,
@@ -164,7 +174,8 @@ class JobOpportunityController extends Controller
         } elseif ($credentials->contains(
             fn ($credential) =>
                 $credential->credential_type === $job->required_license_type
-                && $credential->verification_status !== 'expired'
+                && $credential->verification_status === 'verified'
+                && (!$credential->expiry_date || $credential->expiry_date >= date('Y-m-d'))
         )) {
             $score += 10;
             $reasons[] = 'Required license on profile';
@@ -235,25 +246,6 @@ class JobOpportunityController extends Controller
 
     private function experienceYears(Collection $employment): float
     {
-        $months = 0;
-
-        foreach ($employment as $row) {
-            if (! $row->start_date) continue;
-
-            try {
-                $start = Carbon::parse($row->start_date)->startOfDay();
-                $end = $row->is_current || ! $row->end_date
-                    ? now()->startOfDay()
-                    : Carbon::parse($row->end_date)->startOfDay();
-
-                if ($end->greaterThanOrEqualTo($start)) {
-                    $months += $start->diffInMonths($end);
-                }
-            } catch (\Throwable $e) {
-                continue;
-            }
-        }
-
-        return round($months / 12, 1);
+        return app(\App\Services\SmartRegistration\ProfileEvidenceBridge::class)->experienceYears($employment,'start_date','end_date');
     }
 }

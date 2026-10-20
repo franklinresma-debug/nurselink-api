@@ -11,18 +11,26 @@ use App\Http\Controllers\Api\Application\MyApplicationController;
 use App\Http\Controllers\Api\Application\SmartRegistrationController;
 use App\Http\Controllers\Api\Admin\Application\SmartRegistrationReviewController;
 use App\Http\Controllers\Api\MeController;
+use App\Http\Controllers\Api\NurseLinkRegistrationController;
 use App\Http\Controllers\Api\PolicyConsentController;
 use App\Http\Controllers\Api\Member\MyMemberController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/send-email-link', function (\Illuminate\Http\Request $request) {
+    if ($request->user()->hasRole('applicant') && !config('nurselink.applicant_email_verification_required',true)) {
+        return response()->json(['message'=>'Email verification is temporarily disabled for applicant testing. Continue to Smart Registration.','verification_required'=>false]);
+    }
     if ($request->user()->hasVerifiedEmail()) {
         return response()->json(['message' => 'Email already verified.']);
+    }
+    if (in_array(config('mail.default'), ['log', 'array'], true)) {
+        return response()->json(['message' => 'Email delivery is not configured. Please contact LBS support; your existing account is preserved.'], 503);
     }
     $request->user()->sendEmailVerificationNotification();
     return response()->json(['message' => 'Verification link sent.']);
 })->middleware(['auth:sanctum', 'throttle:6,1']);
 use App\Http\Controllers\Api\Member\Portfolio\MyPortfolioController;
+use App\Http\Controllers\Api\Member\CvMakerController;
 use App\Http\Controllers\Api\Member\Portfolio\EducationController;
 use App\Http\Controllers\Api\Member\Portfolio\EmploymentController;
 use App\Http\Controllers\Api\Member\Portfolio\PortfolioItemController;
@@ -47,7 +55,7 @@ use App\Http\Controllers\Api\Admin\Events\EventAdminController;
 use App\Http\Controllers\Api\Admin\Events\EventAttendanceController;
 
 
-Route::get('/health', fn () => ['status' => 'ok', 'service' => 'NurseLink API', 'build' => config('operations.build')]);
+Route::get('/health', fn () => ['status' => 'ok', 'service' => 'LBS NurseLink API', 'build' => config('operations.build')]);
 Route::get('/registration-status', function () {
     $mode = (string) config('registration.mode', 'open');
 
@@ -58,6 +66,33 @@ Route::get('/registration-status', function () {
         ],
     ]);
 })->middleware('throttle:60,1');
+
+
+/* NURSELINK_TEMPORARY_ENCODER_SESSION_V590_START */
+Route::post(
+    '/nurselink/encoder/session-login',
+    [\App\Http\Controllers\Api\TemporaryEncoderSessionController::class, 'login']
+);
+
+Route::middleware(
+    \App\Http\Middleware\EnsureTemporaryEncoder::class
+)->group(function () {
+    Route::get(
+        '/nurselink/encoder/me',
+        [\App\Http\Controllers\Api\TemporaryEncoderSessionController::class, 'me']
+    );
+
+    Route::post(
+        '/nurselink/encoder/logout',
+        [\App\Http\Controllers\Api\TemporaryEncoderSessionController::class, 'logout']
+    );
+});
+/* NURSELINK_TEMPORARY_ENCODER_SESSION_V590_END */
+
+Route::post(
+    '/nurselink/register',
+    [NurseLinkRegistrationController::class, 'store']
+)->middleware(\App\Http\Middleware\ThrottlePublicRegistration::class);
 
 Route::middleware(['auth:sanctum', 'verified', 'active.user'])->group(function () {
     Route::get('/me', MeController::class);
@@ -139,6 +174,11 @@ Route::middleware(['auth:sanctum', 'verified', 'active.user'])->group(function (
     Route::middleware('permission:profile.manage.own')->group(function () {
         Route::get('/portfolio/me', [MyPortfolioController::class, 'show']);
         Route::patch('/portfolio/me/summary', [MyPortfolioController::class, 'updateSummary']);
+        Route::get('/cv-maker', [CvMakerController::class, 'show']);
+        Route::patch('/cv-maker', [CvMakerController::class, 'save']);
+        Route::post('/cv-maker/signature', [CvMakerController::class, 'storeSignature']);
+        Route::get('/cv-maker/signature/image', [CvMakerController::class, 'signatureImage']);
+        Route::delete('/cv-maker/signature', [CvMakerController::class, 'destroySignature']);
         Route::post('/portfolio/education', [EducationController::class, 'store']);
         Route::patch('/portfolio/education/{education}', [EducationController::class, 'update']);
         Route::delete('/portfolio/education/{education}', [EducationController::class, 'destroy']);
@@ -184,6 +224,7 @@ Route::middleware(['auth:sanctum', 'verified', 'active.user'])->group(function (
         Route::middleware('permission:application.review')->group(function () {
             Route::get('/applications', [ApplicationReviewController::class, 'index']);
             Route::get('/applications/{application}', [ApplicationReviewController::class, 'show']);
+            Route::post('/applications/{application}/temporary-encoder-handoff', [\App\Http\Controllers\Api\TemporaryEncoderController::class, 'applicationHandoff']);
             Route::post('/applications/{application}/start-review', [ApplicationReviewController::class, 'start']);
             Route::post('/applications/{application}/return', [ApplicationReviewController::class, 'returnForInformation']);
             Route::post('/applications/{application}/approve', [ApplicationReviewController::class, 'approve']);
@@ -274,7 +315,7 @@ Route::middleware(['auth:sanctum', 'verified', 'active.user'])->group(function (
 });
 
 // NL-010 Analytics, Reporting, Privacy & Production Readiness
-Route::get('/health/live', fn () => response()->json(['status'=>'ok','service'=>'NurseLink API','build'=>config('operations.build'),'release'=>config('operations.release')]));
+Route::get('/health/live', fn () => response()->json(['status'=>'ok','service'=>'LBS NurseLink API','build'=>config('operations.build'),'release'=>config('operations.release')]));
 Route::get('/health/ready', function (\App\Services\Operations\ReadinessCheckService $service) {
     $result = $service->check(false);
     return response()->json($result, $result['status'] === 'fail' ? 503 : 200);
@@ -420,7 +461,7 @@ Route::get('/public-profile/{slug}/photo', [\App\Http\Controllers\Api\PublicProf
 /* NURSELINK_PUBLIC_PROFILE_V260_END */
 
 /* NURSELINK_SESSION_BOOTSTRAP_V265_START */
-Route::get(
+Route::post(
     '/nurselink/session-bootstrap',
     [\App\Http\Controllers\Api\SessionBootstrapController::class, 'show']
 );
@@ -540,11 +581,25 @@ Route::middleware(['auth:sanctum', 'verified', 'active.user'])->group(function (
 });
 /* NURSELINK_MEMBERSHIP_COMMAND_CENTER_V440_END */
 
+/* NURSELINK_MEMBERSHIP_CYCLE_HEALTH_V559_COMPAT_START */
+Route::middleware(['auth:sanctum', 'verified', 'active.user'])->group(function () {
+    Route::get('/nurselink/admin/membership-cycle-health/{id}', [\App\Http\Controllers\Api\MembershipCycleHealthController::class, 'show'])
+        ->whereNumber('id')
+        ->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
+    Route::post('/nurselink/admin/membership-cycle-health/{id}/reconcile', [\App\Http\Controllers\Api\MembershipCycleHealthController::class, 'reconcile'])
+        ->whereNumber('id')
+        ->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
+});
+/* NURSELINK_MEMBERSHIP_CYCLE_HEALTH_V559_COMPAT_END */
+
 /* NURSELINK_MEMBER_REGISTRY_V450_START */
 Route::middleware(['auth:sanctum', 'verified', 'active.user'])->group(function () {
     Route::get('/nurselink/admin/member-registry/summary', [\App\Http\Controllers\Api\AdminMemberRegistryController::class, 'summary'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
     Route::get('/nurselink/admin/member-registry', [\App\Http\Controllers\Api\AdminMemberRegistryController::class, 'index'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
     Route::get('/nurselink/admin/member-registry/{membershipId}', [\App\Http\Controllers\Api\AdminMemberRegistryController::class, 'show'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
+    Route::get('/nurselink/admin/member-registry/{membershipId}/photo', [\App\Http\Controllers\Api\AdminMemberRegistryController::class, 'photo'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
+    Route::get('/nurselink/admin/member-registry/{membershipId}/documents/{fileId}', [\App\Http\Controllers\Api\AdminMemberRegistryController::class, 'document'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
+    Route::post('/nurselink/admin/member-registry/{membershipId}/documents/{fileId}/corrected', [\App\Http\Controllers\Api\AdminMemberRegistryController::class, 'saveCorrection'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
 });
 /* NURSELINK_MEMBER_REGISTRY_V450_END */
 
@@ -794,15 +849,37 @@ Route::middleware(['auth:sanctum', 'verified', 'active.user'])->group(function (
     Route::post('/nurselink/admin/operations-center/support-cases', [\App\Http\Controllers\Api\AdministrationOperationsCenterController::class, 'storeSupportCase'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
     Route::put('/nurselink/admin/operations-center/support-cases/{caseId}', [\App\Http\Controllers\Api\AdministrationOperationsCenterController::class, 'updateSupportCase'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
     Route::post('/nurselink/admin/operations-center/communications', [\App\Http\Controllers\Api\AdministrationOperationsCenterController::class, 'sendCommunication'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
+    Route::get('/nurselink/admin/operations-center/email', [\App\Http\Controllers\Api\AdminEmailManagementController::class, 'index'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
+    Route::get('/nurselink/admin/operations-center/email/{threadId}', [\App\Http\Controllers\Api\AdminEmailManagementController::class, 'show'])->whereNumber('threadId')->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
+    Route::post('/nurselink/admin/operations-center/email', [\App\Http\Controllers\Api\AdminEmailManagementController::class, 'send'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
+    Route::patch('/nurselink/admin/operations-center/email/{threadId}', [\App\Http\Controllers\Api\AdminEmailManagementController::class, 'update'])->whereNumber('threadId')->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
     Route::get('/nurselink/admin/operations-center/audit-log', [\App\Http\Controllers\Api\AdministrationOperationsCenterController::class, 'auditLog'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
     Route::get('/nurselink/admin/operations-center/system-health', [\App\Http\Controllers\Api\AdministrationOperationsCenterController::class, 'systemHealth'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
     Route::get('/nurselink/admin/operations-center/settings', [\App\Http\Controllers\Api\AdministrationOperationsCenterController::class, 'settings'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
 });
 /* NURSELINK_ADMIN_OPERATIONS_CENTER_V530_END */
 
+/* NURSELINK_ADMIN_APPEARANCE_SETTINGS_V6331_START */
+Route::get('/nurselink/appearance-settings', [\App\Http\Controllers\Api\AdminAppearanceSettingsController::class, 'published']);
+Route::get('/nurselink/appearance-assets/{filename}', [\App\Http\Controllers\Api\AdminAppearanceSettingsController::class, 'logoAsset'])
+    ->where('filename', '[A-Za-z0-9][A-Za-z0-9._-]+');
+Route::middleware(['auth:sanctum', 'verified', 'active.user'])->group(function () {
+    Route::get('/nurselink/admin/operations-center/appearance-settings', [\App\Http\Controllers\Api\AdminAppearanceSettingsController::class, 'current'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
+    Route::post('/nurselink/admin/operations-center/appearance-settings/draft', [\App\Http\Controllers\Api\AdminAppearanceSettingsController::class, 'saveDraft'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
+    Route::post('/nurselink/admin/operations-center/appearance-settings/logos/{placement}', [\App\Http\Controllers\Api\AdminAppearanceSettingsController::class, 'uploadLogo'])
+        ->whereIn('placement', ['login', 'admin', 'sidebar', 'favicon'])
+        ->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
+    Route::post('/nurselink/admin/operations-center/appearance-settings/{version}/publish', [\App\Http\Controllers\Api\AdminAppearanceSettingsController::class, 'publish'])->whereNumber('version')->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
+    Route::get('/nurselink/admin/operations-center/appearance-settings/history', [\App\Http\Controllers\Api\AdminAppearanceSettingsController::class, 'history'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
+    Route::post('/nurselink/admin/operations-center/appearance-settings/{version}/restore', [\App\Http\Controllers\Api\AdminAppearanceSettingsController::class, 'restore'])->whereNumber('version')->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
+});
+/* NURSELINK_ADMIN_APPEARANCE_SETTINGS_V6331_END */
+
 /* NURSELINK_ADMIN_MANAGEMENT_V553_START */
 Route::middleware(['auth:sanctum', 'verified', 'active.user'])->group(function () {
     Route::post('/nurselink/admin/management/invitations/accept', [\App\Http\Controllers\Api\AdminManagementController::class, 'accept']);
+    Route::get('/nurselink/admin/management/member-candidates', [\App\Http\Controllers\Api\AdminManagementController::class, 'memberCandidates'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
+    Route::post('/nurselink/admin/management/assign-member', [\App\Http\Controllers\Api\AdminManagementController::class, 'assignMember'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
     Route::get('/nurselink/admin/management/me', [\App\Http\Controllers\Api\AdminManagementController::class, 'myPermissions'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
     Route::get('/nurselink/admin/management', [\App\Http\Controllers\Api\AdminManagementController::class, 'index'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
     Route::post('/nurselink/admin/management/invitations', [\App\Http\Controllers\Api\AdminManagementController::class, 'invite'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
@@ -813,19 +890,307 @@ Route::middleware(['auth:sanctum', 'verified', 'active.user'])->group(function (
 });
 /* NURSELINK_ADMIN_MANAGEMENT_V553_END */
 
+
+/* NURSELINK_BULK_ADMIN_IMPORT_QUEUE_V660_START */
+Route::middleware([
+    'auth:sanctum',
+    'verified',
+    'active.user',
+    \App\Http\Middleware\EnsureNurseLinkAdminPermission::class,
+])->group(function () {
+    Route::get(
+        '/nurselink/admin/bulk-nurse-import',
+        [\App\Http\Controllers\Api\AdminBulkNurseImportController::class, 'index']
+    );
+
+    Route::get(
+        '/nurselink/admin/bulk-nurse-import/{candidateId}',
+        [\App\Http\Controllers\Api\AdminBulkNurseImportController::class, 'show']
+    )->whereNumber('candidateId');
+
+    Route::post(
+        '/nurselink/admin/bulk-nurse-import/{candidateId}/import',
+        [\App\Http\Controllers\Api\AdminBulkNurseImportController::class, 'import']
+    )->whereNumber('candidateId');
+});
+/* NURSELINK_BULK_ADMIN_IMPORT_QUEUE_V660_END */
+
 /* NURSELINK_ADMIN_GOVERNANCE_V554_START */
 Route::middleware(['auth:sanctum', 'verified', 'active.user'])->group(function () {
     Route::get('/nurselink/admin/management/governance-history', [\App\Http\Controllers\Api\AdminManagementController::class, 'governanceHistory'])->middleware(\App\Http\Middleware\EnsureNurseLinkAdminPermission::class);
 });
 /* NURSELINK_ADMIN_GOVERNANCE_V554_END */
 
+
+/* NURSELINK_TEMPORARY_ENCODER_MANAGEMENT_V590_START */
+Route::middleware([
+    'auth:sanctum',
+    'verified',
+    'active.user',
+    \App\Http\Middleware\EnsureNurseLinkAdminPermission::class,
+])->group(function () {
+    Route::get(
+        '/nurselink/admin/temporary-encoders',
+        [\App\Http\Controllers\Api\TemporaryEncoderController::class, 'adminIndex']
+    );
+
+    Route::post(
+        '/nurselink/admin/temporary-encoders',
+        [\App\Http\Controllers\Api\TemporaryEncoderController::class, 'adminCreate']
+    );
+
+    Route::patch(
+        '/nurselink/admin/temporary-encoders/{encoderId}',
+        [\App\Http\Controllers\Api\TemporaryEncoderController::class, 'adminUpdate']
+    )->whereNumber('encoderId');
+
+    Route::post(
+        '/nurselink/admin/temporary-encoders/{encoderId}/reset-password',
+        [\App\Http\Controllers\Api\TemporaryEncoderController::class, 'adminResetPassword']
+    )->whereNumber('encoderId');
+
+    Route::get(
+        '/nurselink/admin/temporary-encoders/{encoderId}/assignments',
+        [\App\Http\Controllers\Api\TemporaryEncoderController::class, 'adminAssignments']
+    )->whereNumber('encoderId');
+
+    Route::post(
+        '/nurselink/admin/temporary-encoders/{encoderId}/assignments',
+        [\App\Http\Controllers\Api\TemporaryEncoderController::class, 'adminAssignNurse']
+    )->whereNumber('encoderId');
+
+    Route::delete(
+        '/nurselink/admin/temporary-encoders/{encoderId}/assignments/{assignmentId}',
+        [\App\Http\Controllers\Api\TemporaryEncoderController::class, 'adminRevokeAssignment']
+    )
+        ->whereNumber('encoderId')
+        ->whereNumber('assignmentId');
+});
+/* NURSELINK_TEMPORARY_ENCODER_MANAGEMENT_V590_END */
+
+/* NURSELINK_TEMPORARY_ENCODER_WORKSPACE_V591_START */
+Route::middleware(
+    \App\Http\Middleware\EnsureTemporaryEncoder::class
+)->group(function () {
+    Route::get('/nurselink/encoder/nurses/{userId}/documents', [\App\Http\Controllers\Api\TemporaryEncoderController::class, 'documents']);
+    Route::post('/nurselink/encoder/nurses/{userId}/documents', [\App\Http\Controllers\Api\TemporaryEncoderController::class, 'uploadDocument']);
+    Route::get('/nurselink/encoder/nurses/{userId}/documents/{source}/{documentId}/preview', [\App\Http\Controllers\Api\TemporaryEncoderController::class, 'previewDocument'])->whereNumber('documentId');
+
+    Route::get(
+        '/nurselink/encoder/assignments',
+        [\App\Http\Controllers\Api\TemporaryEncoderController::class, 'assignments']
+    );
+
+    Route::get(
+        '/nurselink/encoder/nurses/{userId}',
+        [\App\Http\Controllers\Api\TemporaryEncoderController::class, 'showNurse']
+    );
+
+    Route::patch(
+        '/nurselink/encoder/nurses/{userId}/personal',
+        [\App\Http\Controllers\Api\TemporaryEncoderController::class, 'updatePersonal']
+    );
+
+    Route::patch(
+        '/nurselink/encoder/nurses/{userId}/professional',
+        [\App\Http\Controllers\Api\TemporaryEncoderController::class, 'updateProfessional']
+    );
+
+    Route::get(
+        '/nurselink/encoder/nurses/{userId}/workflow',
+        [\App\Http\Controllers\Api\TemporaryEncoderWorkflowController::class, 'show']
+    );
+
+    Route::post(
+        '/nurselink/encoder/nurses/{userId}/submit',
+        [\App\Http\Controllers\Api\TemporaryEncoderWorkflowController::class, 'submit']
+    );
+
+    Route::post(
+        '/nurselink/encoder/nurses/{userId}/membership-transition',
+        [\App\Http\Controllers\Api\TemporaryEncoderWorkflowController::class, 'transitionMembership']
+    );
+
+    Route::post(
+        '/nurselink/encoder/nurses/{userId}/standing',
+        [\App\Http\Controllers\Api\TemporaryEncoderWorkflowController::class, 'transitionStanding']
+    );
+
+    Route::patch(
+        '/nurselink/encoder/nurses/{userId}/credentials/{credentialId}',
+        [\App\Http\Controllers\Api\TemporaryEncoderWorkflowController::class, 'reviewCredential']
+    );
+
+    Route::get(
+        '/nurselink/encoder/bulk-intake',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'index']
+    );
+
+    Route::post(
+        '/nurselink/encoder/bulk-intake',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'create']
+    );
+
+    Route::get(
+        '/nurselink/encoder/bulk-intake/{batchId}',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'show']
+    );
+
+    Route::post(
+        '/nurselink/encoder/bulk-intake/{batchId}/files',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'upload']
+    );
+
+    Route::delete(
+        '/nurselink/encoder/bulk-intake/{batchId}/files/{fileId}',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'destroyFile']
+    );
+
+    Route::post(
+        '/nurselink/encoder/bulk-intake/{batchId}/files/{fileId}/reprocess',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'reprocessFile']
+    );
+
+    Route::get(
+        '/nurselink/encoder/bulk-intake/{batchId}/files/{fileId}/preview',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'previewFile']
+    );
+
+    Route::post(
+        '/nurselink/encoder/bulk-intake/{batchId}/group',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'group']
+    );
+
+    Route::get(
+        '/nurselink/encoder/bulk-intake/{batchId}/candidates',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'candidates']
+    );
+
+    Route::patch(
+        '/nurselink/encoder/bulk-intake/{batchId}/candidates/{candidateId}',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'updateCandidate']
+    );
+
+    Route::get(
+        '/nurselink/encoder/bulk-intake/{batchId}/candidates/{candidateId}/photo',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'candidatePhoto']
+    );
+
+    Route::post(
+        '/nurselink/encoder/bulk-intake/{batchId}/candidates/{candidateId}/ready-for-import',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'readyForImport']
+    );
+
+    Route::post(
+        '/nurselink/encoder/bulk-intake/{batchId}/candidates/{candidateId}/records/approve-all',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'approveAllStructuredRecords']
+    );
+
+    Route::post(
+        '/nurselink/encoder/bulk-intake/{batchId}/candidates/{candidateId}/records/reject-all',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'rejectAllStructuredRecords']
+    );
+
+    Route::post(
+        '/nurselink/encoder/bulk-intake/{batchId}/candidates/{candidateId}/records/{type}',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'createStructuredRecord']
+    );
+
+    Route::patch(
+        '/nurselink/encoder/bulk-intake/{batchId}/candidates/{candidateId}/records/{type}/{recordId}',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'updateStructuredRecord']
+    );
+
+    Route::post(
+        '/nurselink/encoder/bulk-intake/{batchId}/candidates/{candidateId}/records/{type}/{recordId}/review',
+        [\App\Http\Controllers\Api\TemporaryEncoderBulkIntakeController::class, 'reviewStructuredRecord']
+    );
+});
+/* NURSELINK_TEMPORARY_ENCODER_WORKSPACE_V591_END */
+
+Route::middleware(['auth:sanctum','verified','active.user',\App\Http\Middleware\EnsureNurseLinkAdminPermission::class])->prefix('nurselink/admin/membership-command')->group(function(){
+ Route::get('/{id}/workflow-review',[\App\Http\Controllers\Api\AdminMembershipCommandController::class,'workflowReview'])->whereNumber('id');
+ Route::post('/{id}/workflow-review/{issue}/resolve',[\App\Http\Controllers\Api\AdminMembershipCommandController::class,'resolveWorkflowIssue'])->whereNumber('id')->whereNumber('issue')->middleware('throttle:30,1');
+});
 /* NURSELINK_SMART_REGISTRATION_V557_START */
-Route::middleware(['auth:sanctum', 'verified', 'active.user'])->prefix('smart-registration')->group(function () {
+Route::middleware(['auth:sanctum', 'verified', 'active.user', \App\Http\Middleware\ApplicantSyncIdempotency::class, \App\Http\Middleware\TrackApplicantReviewEdits::class, \App\Http\Middleware\TrackApplicationActivity::class])->prefix('smart-registration')->group(function () {
     Route::get('/', [\App\Http\Controllers\Api\SmartRegistrationController::class, 'show']);
     Route::post('/documents', [\App\Http\Controllers\Api\SmartRegistrationController::class, 'upload']);
+    Route::get('/documents/{id}/preview/{page}', [\App\Http\Controllers\Api\SmartRegistrationController::class, 'previewDocumentPage'])->whereNumber('id')->whereNumber('page')->middleware('throttle:90,1');
+    Route::post('/reset-test-record', [\App\Http\Controllers\Api\SmartRegistrationController::class, 'resetTestRecord'])->middleware('throttle:15,1');
     Route::delete('/documents/{id}', [\App\Http\Controllers\Api\SmartRegistrationController::class, 'destroyDocument'])->whereNumber('id');
+    Route::post('/documents/{id}/reprocess', [\App\Http\Controllers\Api\SmartRegistrationController::class, 'reprocess'])->whereNumber('id')->middleware('throttle:6,1');
     Route::patch('/personal', [\App\Http\Controllers\Api\SmartRegistrationController::class, 'savePersonal']);
     Route::patch('/professional', [\App\Http\Controllers\Api\SmartRegistrationController::class, 'saveProfessional']);
     Route::post('/submit', [\App\Http\Controllers\Api\SmartRegistrationController::class, 'submit']);
 });
 /* NURSELINK_SMART_REGISTRATION_V557_END */
+
+// Two-way in-app member and administrator conversations.
+Route::middleware(['auth:sanctum', 'verified', 'active.user'])->group(function () {
+    foreach (['/nurselink/conversations', '/nurselink/admin/operations-center/communications/threads'] as $base) {
+        $middleware = str_contains($base, '/admin/') ? [\App\Http\Middleware\EnsureNurseLinkAdminPermission::class] : ['permission:message.view.own'];
+        Route::middleware($middleware)->group(function () use ($base) {
+            Route::get($base, [\App\Http\Controllers\Api\NurseLinkConversationController::class, 'index']);
+            Route::get($base.'/summary', [\App\Http\Controllers\Api\NurseLinkConversationController::class, 'summary']);
+            Route::get($base.'/{id}/{message}/attachment', [\App\Http\Controllers\Api\NurseLinkConversationController::class, 'attachment'])->whereNumber('id')->whereNumber('message');
+            Route::post($base, [\App\Http\Controllers\Api\NurseLinkConversationController::class, 'store'])->middleware('throttle:20,1');
+            Route::get($base.'/{id}', [\App\Http\Controllers\Api\NurseLinkConversationController::class, 'show'])->whereNumber('id');
+            Route::post($base.'/{id}', [\App\Http\Controllers\Api\NurseLinkConversationController::class, 'reply'])->whereNumber('id')->middleware('throttle:30,1');
+            Route::post($base.'/{id}/read', [\App\Http\Controllers\Api\NurseLinkConversationController::class, 'read'])->whereNumber('id');
+        });
+    }
+});
+
+Route::middleware(['auth:sanctum','verified','active.user','permission:message.view.own','throttle:6,1'])->post('/nurselink/faq-assistant',[\App\Http\Controllers\Api\NurseLinkFaqAssistantController::class,'answer']);
+
+require __DIR__.'/lbs_queue.php';
+
+require __DIR__.'/lbs_processing.php';
+
+// Direct Meta callbacks are authenticated with a verification token / HMAC signature.
+Route::get('/communications/whatsapp/webhook', [\App\Http\Controllers\Api\Communications\MetaWhatsAppWebhookController::class, 'verify']);
+Route::post('/communications/whatsapp/webhook', [\App\Http\Controllers\Api\Communications\MetaWhatsAppWebhookController::class, 'receive']);
+
+Route::middleware(['auth:sanctum', 'verified', 'active.user', \App\Http\Middleware\EnsureNurseLinkAdminPermission::class])->prefix('/nurselink/admin/operations-center/settings/meta-whatsapp')->group(function () {
+    Route::get('/', [\App\Http\Controllers\Api\AdminMetaWhatsAppController::class, 'show']);
+    Route::put('/', [\App\Http\Controllers\Api\AdminMetaWhatsAppController::class, 'save'])->middleware('throttle:10,1');
+    Route::post('/check', [\App\Http\Controllers\Api\AdminMetaWhatsAppController::class, 'check'])->middleware('throttle:5,1');
+});
+
+Route::middleware(['auth:sanctum', 'verified', 'active.user', \App\Http\Middleware\EnsureNurseLinkAdminPermission::class])->prefix('/nurselink/admin/operations-center/settings/meta-messenger')->group(function () {
+    Route::get('/', [\App\Http\Controllers\Api\AdminMetaMessengerController::class, 'index']);
+    Route::put('/', [\App\Http\Controllers\Api\AdminMetaMessengerController::class, 'store'])->middleware('throttle:10,1');
+    Route::post('/check', [\App\Http\Controllers\Api\AdminMetaMessengerController::class, 'connection'])->middleware('throttle:5,1');
+});
+Route::get('/communications/messenger/webhook', [\App\Http\Controllers\Api\Communications\MetaMessengerWebhookController::class, 'verify']);
+Route::post('/communications/messenger/webhook', [\App\Http\Controllers\Api\Communications\MetaMessengerWebhookController::class, 'receive']);
+
+// LBS private migration review; no production promotion endpoint.
+require __DIR__.'/lbs_migration_staging.php';
+
+Route::get('/nurselink/admin/email-intakes',[\App\Http\Controllers\Api\AdminEmailManagementController::class,'intakes'])->middleware(['auth:sanctum','verified','active.user',\App\Http\Middleware\EnsureNurseLinkAdminPermission::class]);
+Route::get('/nurselink/admin/membership-command/application/{application}/review-link',[\App\Http\Controllers\Api\AdminMembershipCommandController::class,'applicationReviewLink'])->whereUuid('application')->middleware(['auth:sanctum','verified','active.user',\App\Http\Middleware\EnsureNurseLinkAdminPermission::class]);
+
+Route::prefix('/nurselink/admin/operations-center/settings/email-setup')->middleware(['auth:sanctum','verified','active.user',\App\Http\Middleware\EnsureNurseLinkAdminPermission::class])->group(function () {
+    Route::get('/',[\App\Http\Controllers\Api\AdminEmailSetupController::class,'show']);
+    Route::put('/',[\App\Http\Controllers\Api\AdminEmailSetupController::class,'update'])->middleware('throttle:10,1');
+    Route::post('/test',[\App\Http\Controllers\Api\AdminEmailSetupController::class,'test'])->middleware('throttle:5,1');
+});
+
+Route::post('/nurselink/admin/email-intakes/{id}/link',[\App\Http\Controllers\Api\AdminEmailManagementController::class,'linkIntake'])->whereNumber('id')->middleware(['auth:sanctum','verified','active.user',\App\Http\Middleware\EnsureNurseLinkAdminPermission::class,'throttle:20,1']);
+
+Route::get('/nurselink/admin/email-intakes/{id}/documents/{document}',[\App\Http\Controllers\Api\AdminEmailManagementController::class,'intakeDocument'])->whereNumber('id')->whereNumber('document')->middleware(['auth:sanctum','verified','active.user',\App\Http\Middleware\EnsureNurseLinkAdminPermission::class]);
+
+Route::middleware(['auth:sanctum','verified','active.user',\App\Http\Middleware\ApplicantSyncIdempotency::class])->prefix('smart-registration')->group(function(){
+ Route::post('/draft',[\App\Http\Controllers\Api\ApplicationSupportController::class,'saveDraft'])->middleware('throttle:60,1');
+ Route::post('/help',[\App\Http\Controllers\Api\ApplicationSupportController::class,'help'])->middleware('throttle:6,1');
+});
+Route::middleware(['auth:sanctum','verified','active.user',\App\Http\Middleware\EnsureNurseLinkAdminPermission::class])->prefix('nurselink/admin/registration-support')->group(function(){
+ Route::get('/',[\App\Http\Controllers\Api\ApplicationSupportController::class,'index']);
+ Route::post('/{id}',[\App\Http\Controllers\Api\ApplicationSupportController::class,'assist'])->whereNumber('id');
+});
+
+
+Route::middleware(['auth:sanctum','verified','active.user',\App\Http\Middleware\EnsureNurseLinkAdminPermission::class,'throttle:60,1'])
+ ->post('/nurselink/admin/registration-support/ocr-review',[\App\Http\Controllers\Api\OcrSandboxController::class,'handle']);

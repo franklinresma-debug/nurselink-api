@@ -9,6 +9,9 @@ return [
         'push' => env('NURSELINK_PUSH_PROVIDER','unconfigured'),
         'whatsapp' => env('NURSELINK_WHATSAPP_PROVIDER','unconfigured'),
     ],
+    // No provider credentials or adapter are assumed. Enable only after provider-specific acceptance.
+    'external_delivery_enabled' => ['sms' => false, 'whatsapp' => (bool) env('META_WHATSAPP_ENABLED', false)],
+    'provider_classes' => ['meta_cloud' => \App\Services\Communications\Channels\MetaWhatsAppChannelProvider::class],
     'campaign_batch_size' => (int) env('NURSELINK_CAMPAIGN_BATCH_SIZE', 250),
     'event_reminder_days' => [7,1],
     'categories' => ['security','account','membership_status','event_service','credentials','qualifications','events','programs','community'],

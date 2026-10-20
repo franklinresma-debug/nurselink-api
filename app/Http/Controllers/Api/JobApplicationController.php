@@ -34,6 +34,9 @@ class JobApplicationController extends Controller
                 'j.specialty',
                 'j.employment_type',
                 'j.apply_url',
+                'j.salary_min',
+                'j.salary_max',
+                'j.salary_currency',
             ])
             ->map(fn ($row) => [
                 'id' => (int) $row->id,
@@ -50,6 +53,9 @@ class JobApplicationController extends Controller
                 'specialty' => $row->specialty,
                 'employment_type' => $row->employment_type,
                 'apply_url' => $row->apply_url,
+                'salary_min' => $row->salary_min !== null ? (float) $row->salary_min : null,
+                'salary_max' => $row->salary_max !== null ? (float) $row->salary_max : null,
+                'salary_currency' => $row->salary_currency,
             ])
             ->values();
 

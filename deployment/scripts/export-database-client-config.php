@@ -2,13 +2,13 @@
 
 use Illuminate\Contracts\Console\Kernel;
 
-if ($argc !== 2 || ! str_starts_with($argv[1], '/run/nurselink-backup/')) {
+if ($argc !== 2 || ! str_starts_with($argv[1], '/run/lbs-lbs-nurselink-backup/')) {
     fwrite(STDERR, "A protected runtime output path is required.\n");
     exit(2);
 }
 
-require '/var/www/nurselink-api/vendor/autoload.php';
-$app = require '/var/www/nurselink-api/bootstrap/app.php';
+require '/var/www/lbs-nurselink-api/vendor/autoload.php';
+$app = require '/var/www/lbs-nurselink-api/bootstrap/app.php';
 $app->make(Kernel::class)->bootstrap();
 
 $connection = config('database.connections.mysql');

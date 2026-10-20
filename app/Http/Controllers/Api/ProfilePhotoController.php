@@ -132,7 +132,7 @@ class ProfilePhotoController extends Controller
 
         return [
             'profile_photo_url' => $hasPhoto
-                ? url('/api/profile-photo/image?v=' . rawurlencode((string) $user->updated_at?->timestamp))
+                ? rtrim((string) config('app.url'), '/') . '/api/profile-photo/image?v=' . rawurlencode((string) $user->updated_at?->timestamp)
                 : null,
             'has_profile_photo' => $hasPhoto,
             'accepted_formats' => ['jpg', 'jpeg', 'png', 'webp'],

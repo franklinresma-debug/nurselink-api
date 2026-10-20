@@ -237,7 +237,7 @@ class PartnerCommunicationController extends Controller
             ->where('active', true)
             ->first();
 
-        abort_unless($access, 403, 'NurseLink partner access is required.');
+        abort_unless($access, 403, 'LBS NurseLink partner access is required.');
 
         $organization = DB::table('nurselink_partner_organizations')
             ->where('id', $access->partner_organization_id)

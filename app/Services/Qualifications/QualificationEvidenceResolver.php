@@ -13,7 +13,8 @@ class QualificationEvidenceResolver
     public function resolve(Member $member, array $rule): array
     {
         $source=(string)($rule['source']??'');
-        $items=$this->items($member,$source);
+        $items=$this->items($member,$source)->concat(app(\App\Services\SmartRegistration\ProfileEvidenceBridge::class)->records((string)$member->user_id,$source));
+        $items=$items->unique(fn($i)=>hash('sha256',json_encode([$source,$i->qualification,$i->institution,$i->employer,$i->position_title,$i->started_on,$i->ended_on,$i->title,$i->language,$i->name])))->values();
         $filters=(array)($rule['filters']??[]);
         $items=$items->filter(fn(Model $item)=>$this->matches($item,$filters));
         if($source==='credential' && !empty($rule['acceptable_validity'])){
@@ -81,11 +82,6 @@ class QualificationEvidenceResolver
 
     private function experienceYears(Collection $items):float
     {
-        $days=$items->sum(function(Model $row){
-            if(!$row->started_on) return 0;
-            $start=CarbonImmutable::parse($row->started_on); $end=$row->ended_on?CarbonImmutable::parse($row->ended_on):CarbonImmutable::today();
-            return max(0,$start->diffInDays($end));
-        });
-        return round($days/365.25,2);
+        return app(\App\Services\SmartRegistration\ProfileEvidenceBridge::class)->experienceYears($items);
     }
 }

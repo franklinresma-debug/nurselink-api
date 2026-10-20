@@ -10,6 +10,6 @@ class MemberProfile extends Model
 {
     use HasUuids;
     protected $guarded = [];
-    protected function casts(): array { return ['date_of_birth' => 'date', 'profile_meta' => 'array']; }
+    protected function casts(): array { return ['date_of_birth' => 'date:Y-m-d', 'profile_meta' => 'array']; }
     public function member(): BelongsTo { return $this->belongsTo(Member::class); }
 }

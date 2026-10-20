@@ -16,6 +16,8 @@ class EnsureApprovedNurseLinkMember
         $user = $request->user();
 
         abort_unless($user, 401);
+        $access=app(\App\Services\ApplicantPortalAccess::class);
+        if($access->eligible($user)){$access->ownRecord($user);return $next($request);}
 
         $userId = (string) $user->getKey();
 
@@ -114,6 +116,8 @@ class EnsureApprovedNurseLinkMember
         Request $request,
         $user
     ): bool {
+        // Token-authenticated API requests have no browser session or test-mode capability.
+        if (! $request->hasSession()) return false;
         $userId = (string) $user->getKey();
 
         $modeUserId = (string) $request->session()->get(

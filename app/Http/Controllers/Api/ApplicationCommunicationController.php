@@ -74,15 +74,17 @@ class ApplicationCommunicationController extends Controller
         int $application,
         int $interview
     ): JsonResponse {
+        return DB::transaction(function () use ($request, $application, $interview): JsonResponse {
         $scope = $this->candidateScope($request, $application);
 
         $row = DB::table('nurselink_interviews')
             ->where('id', $interview)
             ->where('job_application_id', $scope->application_id)
             ->where('partner_organization_id', $scope->partner_organization_id)
-            ->first();
+            ->lockForUpdate()->first();
 
         abort_unless($row, 404);
+        abort_if(in_array($row->status, ['completed', 'cancelled'], true), 409, 'This interview is closed. Contact the recruitment team for a new invitation.');
 
         $data = $request->validate([
             'status' => ['required', 'string', Rule::in([
@@ -115,6 +117,15 @@ class ApplicationCommunicationController extends Controller
             ->where('id', $interview)
             ->update($update);
 
+        DB::table('nurselink_partner_audit')->insert([
+            'user_id' => (string) $request->user()->getKey(),
+            'partner_organization_id' => (int) $scope->partner_organization_id,
+            'action' => 'interview.candidate_responded', 'target_type' => 'interview', 'target_id' => (string) $interview,
+            'before_state' => json_encode($row),
+            'after_state' => json_encode(DB::table('nurselink_interviews')->where('id', $interview)->first()),
+            'created_at' => now(),
+        ]);
+
         $this->notifyPartnerUsers(
             (int) $scope->partner_organization_id,
             'Interview response received',
@@ -127,6 +138,7 @@ class ApplicationCommunicationController extends Controller
             'message' => 'Interview response saved.',
             'data' => DB::table('nurselink_interviews')->where('id', $interview)->first(),
         ]);
+        });
     }
 
     private function candidateScope(Request $request, int $application): object

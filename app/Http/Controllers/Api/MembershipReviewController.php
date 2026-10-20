@@ -74,6 +74,7 @@ class MembershipReviewController extends Controller
 
         return response()->json(['data' => [
             'membership_id' => (int) $membership->id,
+            'workflow_review' => app(\App\Services\SmartRegistration\WorkflowReviewService::class)->refresh((string)$membership->user_id),
             'extraction_summary' => $extractionSummary,
             'profile' => $profile ? [
                 'first_name' => $profile->first_name,
@@ -91,6 +92,11 @@ class MembershipReviewController extends Controller
                 'years_experience' => $profile->years_experience !== null ? (int) $profile->years_experience : null,
                 'current_position' => $profile->current_position,
                 'current_employer' => $profile->current_employer,
+                'employment_countries' => $profile->employment_countries ?? null,
+                'healthcare_facility_names' => $profile->healthcare_facility_names ?? null,
+                'employment_positions' => $profile->employment_positions ?? null,
+                'emergency_contact_name_relationship' => $profile->emergency_contact_name_relationship ?? null,
+                'emergency_contact_phone' => $profile->emergency_contact_phone ?? null,
                 'specialty' => $profile->specialty,
                 'primary_license_number' => $profile->primary_license_number,
                 'primary_license_country' => $profile->primary_license_country,
@@ -107,6 +113,7 @@ class MembershipReviewController extends Controller
                 'file_size' => (int) $document->file_size,
                 'document_type' => $document->document_type,
                 'extraction_status' => $document->extraction_status,
+                'ocr_confidence' => app(\App\Services\DocumentOcrConfidence::class)->summary($document),
                 'extracted_fields' => $document->extracted_fields ? json_decode($document->extracted_fields, true) : null,
                 'extraction_message' => $document->extraction_message,
                 'version' => property_exists($document, 'version') ? (int) $document->version : 1,
@@ -213,6 +220,7 @@ class MembershipReviewController extends Controller
             'reviewer_notes' => ['nullable', 'string', 'max:6000'],
         ]);
 
+        abort_if(app(\App\Services\ApplicantPortalAccess::class)->enabled() && in_array($data['status'], ['ready_for_approval','approved','declined'], true), 422, 'Applicant access is active without approval. Use document discrepancy review instead.');
         $before = DB::table('nurselink_memberships')
             ->where('id', $id)
             ->first();
@@ -324,6 +332,7 @@ class MembershipReviewController extends Controller
                 'This membership application changed in another administrator session. Refresh before saving another review decision.'
             );
 
+            if(in_array($update['status'],['ready_for_approval','approved'],true)) app(\App\Services\SmartRegistration\WorkflowReviewService::class)->assertReady((string)$locked->user_id);
             DB::table('nurselink_memberships')
                 ->where('id', $id)
                 ->update($update);
@@ -426,13 +435,13 @@ class MembershipReviewController extends Controller
             'submitted' => [
                 'info',
                 'Membership application received',
-                'Your NurseLink membership application is in the review queue.',
+                'Your LBS NurseLink membership application is in the review queue.',
                 '/application-status',
             ],
             'under_review' => [
                 'info',
                 'Membership review started',
-                'An authorized NurseLink reviewer is reviewing your membership application.',
+                'An authorized LBS NurseLink reviewer is reviewing your membership application.',
                 '/application-status',
             ],
             'needs_information' => [
@@ -449,14 +458,14 @@ class MembershipReviewController extends Controller
             ],
             'approved' => [
                 'success',
-                'NurseLink membership approved',
-                'Congratulations. Your NurseLink membership has been approved and your digital member identity is now available.',
+                'LBS NurseLink membership approved',
+                'Congratulations. Your LBS NurseLink membership has been approved and your digital member identity is now available.',
                 '/dashboard',
             ],
             'declined' => [
                 'error',
                 'Membership review completed',
-                'Your NurseLink membership application was not approved. Review the decision notes in Application Status.',
+                'Your LBS NurseLink membership application was not approved. Review the decision notes in Application Status.',
                 '/application-status',
             ],
         ];
@@ -502,7 +511,7 @@ class MembershipReviewController extends Controller
             && $expiresAt >= time()
             && (time() - $elevatedAt) <= 28800,
             403,
-            'A separate NurseLink administrator sign-in is required for membership review.'
+            'A separate LBS NurseLink administrator sign-in is required for membership review.'
         );
 
         $role = null;

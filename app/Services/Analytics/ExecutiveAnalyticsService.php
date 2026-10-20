@@ -36,9 +36,15 @@ class ExecutiveAnalyticsService
         $initiatives = Initiative::query();
         $policies = PolicyRecord::query();
 
+        $driver = DB::connection()->getDriverName();
+        $elapsedHours = match ($driver) {
+            'mysql', 'mariadb' => 'TIMESTAMPDIFF(SECOND, submitted_at, approved_at) / 3600.0',
+            'sqlite' => '(julianday(approved_at) - julianday(submitted_at)) * 24.0',
+            default => 'EXTRACT(EPOCH FROM (approved_at - submitted_at)) / 3600.0',
+        };
         $approvalHours = (float) (Application::query()
             ->whereNotNull('submitted_at')->whereNotNull('approved_at')
-            ->selectRaw("AVG(EXTRACT(EPOCH FROM (approved_at - submitted_at)) / 3600) AS avg_hours")
+            ->selectRaw("AVG({$elapsedHours}) AS avg_hours")
             ->value('avg_hours') ?? 0);
 
         $deliveries = DeliveryAttempt::query();

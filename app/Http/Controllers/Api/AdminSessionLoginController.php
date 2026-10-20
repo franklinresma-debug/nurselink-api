@@ -13,7 +13,6 @@ use Illuminate\Validation\ValidationException;
 
 class AdminSessionLoginController extends Controller
 {
-    private const FRONTEND_ORIGIN = 'https://app.amsertech.com';
     private const ELEVATION_TTL_SECONDS = 28800; // 8 hours
 
     public function login(Request $request): JsonResponse
@@ -21,7 +20,7 @@ class AdminSessionLoginController extends Controller
         $this->requireFrontendOrigin($request);
 
         $credentials = $request->validate([
-            'email' => ['required', 'string', 'email'],
+            'email' => ['required', 'string', 'min:3', 'max:254'],
             'password' => ['required', 'string'],
         ]);
 
@@ -33,6 +32,10 @@ class AdminSessionLoginController extends Controller
                 'message' => 'Too many administrator login attempts. Please try again shortly.',
                 'retry_after' => RateLimiter::availableIn($key),
             ], 429);
+        }
+
+        if (Auth::guard('encoder')->check()) {
+            Auth::guard('encoder')->logout();
         }
 
         if (Auth::guard('web')->check()) {
@@ -48,12 +51,16 @@ class AdminSessionLoginController extends Controller
             'email' => $credentials['email'],
             'password' => $credentials['password'],
         ])) {
-            throw ValidationException::withMessages([
-                'email' => ['The provided credentials do not match our records.'],
-            ]);
+            return $this->encoderLogin($request, $credentials, $key);
         }
 
         $user = Auth::guard('web')->user();
+
+        $access = $this->resolvePrivilegedAccess($user);
+        if (! $access['privileged']) {
+            $this->terminateSession($request);
+            return $this->encoderLogin($request, $credentials, $key);
+        }
 
         if (
             method_exists($user, 'hasVerifiedEmail')
@@ -63,16 +70,6 @@ class AdminSessionLoginController extends Controller
 
             return response()->json([
                 'message' => 'A verified NurseLink email is required for administrator access.',
-            ], 403);
-        }
-
-        $access = $this->resolvePrivilegedAccess($user);
-
-        if (! $access['privileged']) {
-            $this->terminateSession($request);
-
-            return response()->json([
-                'message' => 'Administrator or reviewer access is required.',
             ], 403);
         }
 
@@ -91,7 +88,7 @@ class AdminSessionLoginController extends Controller
             'authenticated' => true,
             'admin_session' => true,
             'expires_in_seconds' => self::ELEVATION_TTL_SECONDS,
-            'redirect' => '/nurselink-admin-dashboard.html',
+            'redirect' => $access['role'] === 'reviewer' ? '/admin/#applications' : '/admin/#dashboard',
             'data' => [
                 'role' => $access['role'],
                 'label' => $access['label'],
@@ -101,6 +98,19 @@ class AdminSessionLoginController extends Controller
             ],
             'message' => 'Administrator session established.',
         ]);
+    }
+
+    private function encoderLogin(Request $request, array $credentials, string $key): JsonResponse
+    {
+        $request->merge(['username' => $credentials['email']]);
+        $response = app(TemporaryEncoderSessionController::class)->login($request);
+        if ($response->isSuccessful()) {
+            RateLimiter::clear($key);
+            $payload = $response->getData(true);
+            $payload['redirect'] = '/admin/encoder.html';
+            $response->setData($payload);
+        }
+        return $response;
     }
 
     public function logout(Request $request): JsonResponse
@@ -126,7 +136,7 @@ class AdminSessionLoginController extends Controller
         $origin = (string) $request->headers->get('Origin', '');
 
         abort_unless(
-            hash_equals(self::FRONTEND_ORIGIN, $origin),
+            $origin !== '' && hash_equals(rtrim((string) config('app.frontend_url'), '/'), $origin),
             403,
             'NurseLink frontend origin required.'
         );
@@ -149,6 +159,13 @@ class AdminSessionLoginController extends Controller
                 ->where('active', true)
                 ->exists();
 
+        $granularSuperAdmin = Schema::hasTable('nurselink_admin_role_assignments')
+            && DB::table('nurselink_admin_role_assignments')
+                ->where('user_id', $userId)
+                ->where('role_key', 'super_administrator')
+                ->where('active', true)
+                ->exists();
+
         $modelRole = strtolower(trim((string) (
             $user->role
             ?? $user->user_role
@@ -167,6 +184,7 @@ class AdminSessionLoginController extends Controller
         $reviewRole = strtolower((string) ($reviewerAccess->role ?? ''));
 
         $isSuperAdmin = $explicitSuperAdmin
+            || $granularSuperAdmin
             || $modelSuperAdmin
             || $reviewRole === 'super_admin';
 

@@ -123,6 +123,7 @@ class ApplicationLifecycleService
                 throw ValidationException::withMessages(['status' => 'Only an application under review can be approved.']);
             }
 
+            app(\App\Services\SmartRegistration\WorkflowReviewService::class)->assertReady((string)$application->user_id);
             $this->transition($application, $actor, 'approved');
 
             $member = Member::query()->firstOrCreate(
